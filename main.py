@@ -10,7 +10,6 @@ import uvicorn
 import os
 import json
 import requests
-import hashlib
 import datetime
 import secrets
 
@@ -22,13 +21,27 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 # =====================================
 # ADMIN API SECRET
-# Set this as an environment variable
-# on Render: ADMIN_API_SECRET=yourkey
-# Used to protect all /admin/ endpoints
-# so only you can generate/revoke keys.
+# Set on Render as env var:
+# ADMIN_API_SECRET=yourkey
 # =====================================
 
-API_SECRET = os.getenv("ADMIN_API_SECRET", "changeme-please-set-this")
+API_SECRET = os.getenv(
+    "ADMIN_API_SECRET",
+    "changeme-please-set-this"
+)
+
+# =====================================
+# OWNER ID
+# Your personal Discord user ID.
+# Only YOU can run !licence @user days.
+# Get it by enabling Developer Mode in
+# Discord → right click your name
+# → Copy User ID.
+# Set on Render as env var:
+# OWNER_ID=123456789012345678
+# =====================================
+
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # =====================================
 # FILES
@@ -72,20 +85,6 @@ def load_licenses():
 def save_licenses(data):
     with open(LICENSES_FILE, "w") as f:
         json.dump(data, f, indent=4)
-
-# =====================================
-# VERIFY ADMIN API KEY
-# Protects all /admin/ endpoints.
-# Pass header: X-API-Key: yourkey
-# =====================================
-
-def verify_api_key(x_api_key: str = Header(...)):
-    if x_api_key != API_SECRET:
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid API key."
-        )
-    return x_api_key
 
 # =====================================
 # STORAGE
@@ -190,13 +189,10 @@ async def upload_image(
 # =====================================
 # LICENSE — VALIDATE
 # Called by 123.py on every startup.
-# Checks key validity, expiry, and PC
-# binding. Binds key to first PC that
-# activates it.
 #
 # POST /license/validate
 # Body: {
-#   "key": "XXXX-XXXX-XXXX-XXXX",
+#   "key":       "XXXX-XXXX-XXXX-XXXX",
 #   "client_id": "DESKTOP-ABC"
 # }
 # =====================================
@@ -243,72 +239,13 @@ def validate_license(dict):
 
     print(f"LICENSE OK: {key} for {client_id}")
     return {
-        "valid": True,
-        "expires": expires or "lifetime",
+        "valid":    True,
+        "expires":  expires or "lifetime",
         "customer": entry.get("customer", "")
     }
 
 # =====================================
-# LICENSE — GENERATE (ADMIN ONLY)
-# Creates a new license key.
-#
-# POST /admin/generate
-# Header: X-API-Key: yourkey
-# Body: {
-#   "customer": "John",
-#   "days": 30        ← 0 = lifetime
-# }
-# =====================================
-
-@app.post("/admin/generate")
-def generate_license(
-    dict,
-    api_key: str = Header(..., alias="X-API-Key")
-):
-    verify_api_key(api_key)
-
-    customer = data.get("customer", "unknown")
-    days     = data.get("days", 0)
-
-    raw = secrets.token_hex(8).upper()
-    key = f"{raw[0:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:16]}"
-
-    if days > 0:
-        expires = (
-            datetime.date.today() +
-            datetime.timedelta(days=days)
-        ).isoformat()
-    else:
-        expires = None
-
-    licenses = load_licenses()
-    licenses[key] = {
-        "active":       True,
-        "expires":      expires,
-        "bound_client": None,
-        "customer":     customer
-    }
-    save_licenses(licenses)
-
-    print(
-        f"LICENSE GENERATED: {key} "
-        f"for '{customer}' "
-        f"expires={expires or 'lifetime'}"
-    )
-
-    return {
-        "key":      key,
-        "customer": customer,
-        "expires":  expires or "lifetime"
-    }
-
-# =====================================
-# LICENSE — REVOKE (ADMIN ONLY)
-# Instantly disables a key.
-#
-# POST /admin/revoke
-# Header: X-API-Key: yourkey
-# Body: { "key": "XXXX-XXXX-XXXX-XXXX" }
+# LICENSE — REVOKE (INTERNAL)
 # =====================================
 
 @app.post("/admin/revoke")
@@ -316,7 +253,8 @@ def revoke_license(
     dict,
     api_key: str = Header(..., alias="X-API-Key")
 ):
-    verify_api_key(api_key)
+    if api_key != API_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
 
     key      = data.get("key", "").strip().upper()
     licenses = load_licenses()
@@ -331,13 +269,7 @@ def revoke_license(
     return {"success": True}
 
 # =====================================
-# LICENSE — RESET BINDING (ADMIN ONLY)
-# Unbinds a key from its PC so the
-# customer can activate on a new PC.
-#
-# POST /admin/reset
-# Header: X-API-Key: yourkey
-# Body: { "key": "XXXX-XXXX-XXXX-XXXX" }
+# LICENSE — RESET BINDING (INTERNAL)
 # =====================================
 
 @app.post("/admin/reset")
@@ -345,7 +277,8 @@ def reset_license(
     dict,
     api_key: str = Header(..., alias="X-API-Key")
 ):
-    verify_api_key(api_key)
+    if api_key != API_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
 
     key      = data.get("key", "").strip().upper()
     licenses = load_licenses()
@@ -360,18 +293,15 @@ def reset_license(
     return {"success": True}
 
 # =====================================
-# LICENSE — LIST ALL (ADMIN ONLY)
-# Returns all keys with full details.
-#
-# GET /admin/licenses
-# Header: X-API-Key: yourkey
+# LICENSE — LIST ALL (INTERNAL)
 # =====================================
 
 @app.get("/admin/licenses")
 def list_licenses(
     api_key: str = Header(..., alias="X-API-Key")
 ):
-    verify_api_key(api_key)
+    if api_key != API_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
     return load_licenses()
 
 # =====================================
@@ -453,24 +383,29 @@ def get_client(user_id):
     return links.get(str(user_id))
 
 # =====================================
-# CHECK LICENSE STATUS FOR DISCORD USER
-# Looks up the client_id linked to the
-# Discord user and checks their license
-# entry in licenses.json directly.
+# GET LICENSE INFO BY CLIENT ID
 # =====================================
 
 def get_license_info(client_id):
-    """
-    Returns the license entry for a
-    given client_id, or None if no
-    license is bound to that PC.
-    """
     licenses = load_licenses()
-
     for key, entry in licenses.items():
         if entry.get("bound_client") == client_id:
             return key, entry
+    return None, None
 
+# =====================================
+# GET LICENSE INFO BY DISCORD USER ID
+# Looks up the license stored under
+# the Discord user's ID directly.
+# Used by !licence @user to find what
+# key was issued to that Discord user.
+# =====================================
+
+def get_license_by_discord_id(discord_id):
+    licenses = load_licenses()
+    for key, entry in licenses.items():
+        if str(entry.get("discord_id", "")) == str(discord_id):
+            return key, entry
     return None, None
 
 # =====================================
@@ -639,24 +574,186 @@ async def close(ctx, target="all"):
     await ctx.send(f"⏳ Closing {target}...")
 
 # =====================================
-# LICENCE — DISCORD COMMAND
-# FIXED: Was just a static "active"
-# message. Now actually looks up the
-# license bound to the user's PC and
-# returns real key (masked),
-# expiry date, and customer name.
+# LICENCE — CHECK STATUS
+# Shows the license info for the user
+# who runs the command.
 # =====================================
 
 @bot.command()
-async def licence(ctx):
+async def licence(ctx, member: discord.Member = None, days: int = None):
+
+    # =====================================
+    # OWNER ONLY — GIVE LICENCE TO USER
+    # Usage: !licence @user 30
+    #        !licence @user 0   ← lifetime
+    # Only works if ctx.author is OWNER.
+    # Generates a new key and DMs it to
+    # the mentioned user directly.
+    # =====================================
+
+    if member is not None and days is not None:
+
+        # Block non-owners from giving licences
+        if ctx.author.id != OWNER_ID:
+            await ctx.send(
+                "❌ Only the owner can issue licences."
+            )
+            return
+
+        # Generate key
+        raw = secrets.token_hex(8).upper()
+        key = (
+            f"{raw[0:4]}-{raw[4:8]}-"
+            f"{raw[8:12]}-{raw[12:16]}"
+        )
+
+        # Calculate expiry
+        if days > 0:
+            expires = (
+                datetime.date.today() +
+                datetime.timedelta(days=days)
+            ).isoformat()
+            expires_display = f"{expires} ({days} days)"
+        else:
+            expires         = None
+            expires_display = "Lifetime"
+
+        # Save to licenses.json
+        # Store discord_id so we can look
+        # up the key by Discord user later
+        licenses = load_licenses()
+        licenses[key] = {
+            "active":       True,
+            "expires":      expires,
+            "bound_client": None,
+            "customer":     str(member),
+            "discord_id":   str(member.id)
+        }
+        save_licenses(licenses)
+
+        print(
+            f"LICENCE ISSUED: {key} "
+            f"→ {member} ({member.id}) "
+            f"expires={expires or 'lifetime'}"
+        )
+
+        # =====================================
+        # DM THE KEY TO THE USER
+        # Sends the key privately so it is
+        # not exposed in the public channel.
+        # =====================================
+
+        try:
+            dm_embed = discord.Embed(
+                title="🔑 Your WhaleBots Licence Key",
+                description=(
+                    "Your licence has been activated.\n"
+                    "Paste this key into `license.txt` "
+                    "next to `123.py` on your PC."
+                ),
+                color=0x00b04f
+            )
+
+            dm_embed.add_field(
+                name="Key",
+                value=f"```{key}```",
+                inline=False
+            )
+
+            dm_embed.add_field(
+                name="Expires",
+                value=expires_display,
+                inline=True
+            )
+
+            dm_embed.add_field(
+                name="How to activate",
+                value=(
+                    "1. Create `license.txt` next to `123.py`\n"
+                    "2. Paste your key inside\n"
+                    "3. Run `123.py`"
+                ),
+                inline=False
+            )
+
+            await member.send(embed=dm_embed)
+            dm_status = "✅ Key sent via DM"
+
+        except discord.Forbidden:
+            # User has DMs disabled
+            dm_status = "⚠️ Could not DM user (DMs disabled)"
+
+        # =====================================
+        # CONFIRM TO OWNER IN CHANNEL
+        # Shows masked key so the channel
+        # does not expose the full key.
+        # =====================================
+
+        masked_key = f"****-****-****-{key[-4:]}"
+
+        confirm_embed = discord.Embed(
+            title="✅ Licence Issued",
+            color=0x00b04f
+        )
+
+        confirm_embed.add_field(
+            name="User",
+            value=member.mention,
+            inline=True
+        )
+
+        confirm_embed.add_field(
+            name="Key (masked)",
+            value=f"`{masked_key}`",
+            inline=True
+        )
+
+        confirm_embed.add_field(
+            name="Expires",
+            value=expires_display,
+            inline=True
+        )
+
+        confirm_embed.add_field(
+            name="DM Status",
+            value=dm_status,
+            inline=False
+        )
+
+        await ctx.send(embed=confirm_embed)
+        return
+
+    # =====================================
+    # NO ARGS — CHECK OWN LICENCE STATUS
+    # Usage: !licence
+    # Shows the licence bound to the
+    # user's connected PC.
+    # =====================================
+
+    # Check if member arg given but no days
+    # e.g. !licence @user  (missing days)
+    if member is not None and days is None:
+        await ctx.send(
+            "⚠️ Please specify days.\n"
+            "Usage: `!licence @user 30` "
+            "or `!licence @user 0` for lifetime."
+        )
+        return
+
+    # Normal status check for self
     data = get_client(ctx.author.id)
 
     if not data:
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    client_id    = data["client_id"]
-    key, entry   = get_license_info(client_id)
+    # Try to find by bound PC first
+    client_id  = data["client_id"]
+    key, entry = get_license_info(client_id)
+
+    # If not found by PC, try by Discord ID
+    if not key:
+        key, entry = get_license_by_discord_id(ctx.author.id)
 
     if not key:
         embed = discord.Embed(
@@ -665,20 +762,17 @@ async def licence(ctx):
         )
         embed.add_field(
             name="Status",
-            value="❌ No licence found for this PC.",
+            value="❌ No licence found for your account.",
             inline=False
         )
         await ctx.send(embed=embed)
         return
 
-    # Mask the key — show only last 4 chars
-    masked_key = f"****-****-****-{key[-4:]}"
+    masked_key   = f"****-****-****-{key[-4:]}"
+    active        = entry.get("active", False)
+    expires       = entry.get("expires") or "Lifetime"
+    customer      = entry.get("customer", "—")
 
-    active  = entry.get("active", False)
-    expires = entry.get("expires") or "Lifetime"
-    customer = entry.get("customer", "—")
-
-    # Check if expired
     is_expired = False
     if entry.get("expires"):
         expiry_date = datetime.date.fromisoformat(
@@ -688,11 +782,11 @@ async def licence(ctx):
             is_expired = True
 
     if not active or is_expired:
-        status_text  = "❌ Inactive / Expired"
-        embed_color  = 0xff4444
+        status_text = "❌ Inactive / Expired"
+        embed_color = 0xff4444
     else:
-        status_text  = "✅ Active"
-        embed_color  = 0x00b04f
+        status_text = "✅ Active"
+        embed_color = 0x00b04f
 
     embed = discord.Embed(
         title="🔑 Licence Status",
