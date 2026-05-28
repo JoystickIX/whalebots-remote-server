@@ -12,11 +12,20 @@ import os
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # =====================================
+# COMMAND STORAGE
+# =====================================
+
+commands_queue = {}
+
+# =====================================
 # DISCORD BOT
 # =====================================
 
 intents = discord.Intents.default()
+
 intents.message_content = True
+intents.guilds = True
+intents.members = True
 
 bot = commands.Bot(
     command_prefix="!",
@@ -38,50 +47,6 @@ def home():
     }
 
 # =====================================
-# DISCORD EVENTS
-# =====================================
-
-@bot.event
-async def on_ready():
-
-    print(f"Logged in as {bot.user}")
-
-# =====================================
-# TEST COMMAND
-# =====================================
-
-@bot.command()
-async def ping(ctx):
-
-    await ctx.send("🏓 Pong!")
-
-# =====================================
-# START DISCORD BOT
-# =====================================
-
-def start_bot():
-
-    bot.run(TOKEN)
-
-# =====================================
-# START EVERYTHING
-# =====================================
-
-threading.Thread(
-    target=start_bot
-).start()
-
-uvicorn.run(
-    app,
-    host="0.0.0.0",
-    port=int(os.environ.get("PORT", 10000))
-)
-# =====================================
-# COMMAND STORAGE
-# =====================================
-
-commands_queue = {}
-# =====================================
 # GET COMMAND
 # =====================================
 
@@ -101,7 +66,26 @@ def get_command(client_id: str):
     return {
         "command": command
     }
-    # =====================================
+
+# =====================================
+# DISCORD READY
+# =====================================
+
+@bot.event
+async def on_ready():
+
+    print(f"Logged in as {bot.user}")
+
+# =====================================
+# PING
+# =====================================
+
+@bot.command()
+async def ping(ctx):
+
+    await ctx.send("🏓 Pong!")
+
+# =====================================
 # ROK COMMAND
 # =====================================
 
@@ -113,7 +97,8 @@ async def ROK(ctx, client_id):
     await ctx.send(
         f"ROK sent to {client_id}"
     )
-    # =====================================
+
+# =====================================
 # COD COMMAND
 # =====================================
 
@@ -124,4 +109,29 @@ async def COD(ctx, client_id):
 
     await ctx.send(
         f"COD sent to {client_id}"
+    )
+
+# =====================================
+# START BOT
+# =====================================
+
+def start_bot():
+
+    bot.run(TOKEN)
+
+# =====================================
+# START EVERYTHING
+# =====================================
+
+if __name__ == "__main__":
+
+    threading.Thread(
+        target=start_bot,
+        daemon=True
+    ).start()
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
     )
