@@ -25,27 +25,6 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 LINKS_FILE = "links.json"
 
 # =====================================
-# LICENCE
-# =====================================
-
-@bot.command()
-async def licence(ctx):
-
-    data = get_client(ctx.author.id)
-
-    if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
-        return
-
-    await ctx.send(
-        "✅ Your licence is active."
-    )
-
-# =====================================
 # CREATE LINKS FILE
 # =====================================
 
@@ -327,10 +306,6 @@ async def help(ctx):
         color=0x00b0f4
     )
 
-    # =====================================
-    # SETUP
-    # =====================================
-
     embed.add_field(
         name="🔗 Setup",
         value=(
@@ -338,10 +313,6 @@ async def help(ctx):
         ),
         inline=False
     )
-
-    # =====================================
-    # GAME CONTROLS
-    # =====================================
 
     embed.add_field(
         name="🎮 Game Controls",
@@ -351,10 +322,6 @@ async def help(ctx):
         ),
         inline=False
     )
-
-    # =====================================
-    # MONITORING
-    # =====================================
 
     embed.add_field(
         name="🖥️ Monitoring",
@@ -369,10 +336,6 @@ async def help(ctx):
         inline=False
     )
 
-    # =====================================
-    # SYSTEM
-    # =====================================
-
     embed.add_field(
         name="⚙️ System",
         value=(
@@ -383,9 +346,13 @@ async def help(ctx):
         inline=False
     )
 
-    # =====================================
-    # CONNECTED PC
-    # =====================================
+    embed.add_field(
+        name="🔑 Licence",
+        value=(
+            "`!licence` → Check licence status"
+        ),
+        inline=False
+    )
 
     embed.add_field(
         name="Connected PC",
@@ -539,6 +506,27 @@ async def close(ctx, target="all"):
 
     await ctx.send(
         f"⏳ Closing {target}..."
+    )
+
+# =====================================
+# LICENCE
+# =====================================
+
+@bot.command()
+async def licence(ctx):
+
+    data = get_client(ctx.author.id)
+
+    if not data:
+
+        await ctx.send(
+            "⚠️ Use `!setup CODE` first."
+        )
+
+        return
+
+    await ctx.send(
+        "✅ Your licence is active."
     )
 
 # =====================================
