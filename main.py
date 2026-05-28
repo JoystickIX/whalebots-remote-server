@@ -242,16 +242,37 @@ async def help(ctx):
 # =====================================
 
 @bot.command()
-async def setup(ctx, client_id: str):
+async def setup(ctx):
 
-    # CHECK CLIENT ONLINE
-    if client_id not in online_clients:
+    # NO ONLINE PCS
+    if len(online_clients) == 0:
 
         await ctx.send(
-            f"❌ PC `{client_id}` is offline."
+            "❌ No online PCs detected."
         )
 
         return
+
+    # MULTIPLE PCS
+    if len(online_clients) > 1:
+
+        pc_list = "\n".join(
+            online_clients.keys()
+        )
+
+        await ctx.send(
+            "⚠️ Multiple PCs detected.\n\n"
+            "Use:\n"
+            "`!setup PCNAME`\n\n"
+            f"Available PCs:\n{pc_list}"
+        )
+
+        return
+
+    # GET FIRST ONLINE PC
+    client_id = list(
+        online_clients.keys()
+    )[0]
 
     links = load_links()
 
