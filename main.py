@@ -3,12 +3,13 @@
 # =====================================
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from fastapi import FastAPI
 import threading
 import uvicorn
 import os
 import json
+import requests
 
 # =====================================
 # TOKEN
@@ -63,6 +64,7 @@ def save_links(data):
 # =====================================
 
 commands_queue = {}
+status_queue = {}
 
 # =====================================
 # DISCORD SETTINGS
@@ -115,6 +117,40 @@ def get_command(client_id: str):
     }
 
 # =====================================
+# SEND STATUS
+# =====================================
+
+@app.post("/status/{client_id}")
+def send_status(client_id: str, data: dict):
+
+    status_queue[client_id] = data.get("message")
+
+    return {
+        "success": True
+    }
+
+# =====================================
+# GET STATUS
+# =====================================
+
+@app.get("/status/{client_id}")
+def get_status(client_id: str):
+
+    message = status_queue.get(client_id)
+
+    if not message:
+
+        return {
+            "message": None
+        }
+
+    status_queue[client_id] = None
+
+    return {
+        "message": message
+    }
+
+# =====================================
 # BOT READY
 # =====================================
 
@@ -122,6 +158,40 @@ def get_command(client_id: str):
 async def on_ready():
 
     print(f"Logged in as {bot.user}")
+
+    check_status.start()
+
+# =====================================
+# STATUS CHECKER
+# =====================================
+
+@tasks.loop(seconds=2)
+async def check_status():
+
+    links = load_links()
+
+    for user_id, client_id in links.items():
+
+        try:
+
+            response = requests.get(
+                f"https://whalebots-remote-server.onrender.com/status/{client_id}"
+            )
+
+            data = response.json()
+
+            message = data.get("message")
+
+            if message:
+
+                user = await bot.fetch_user(
+                    int(user_id)
+                )
+
+                await user.send(message)
+
+        except:
+            pass
 
 # =====================================
 # HELP
@@ -146,16 +216,9 @@ async def help(ctx):
         name="🎮 Game Controls",
         value=(
             "`!rok`\n"
-            "`!cod`"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🖥️ Monitoring",
-        value=(
-            "`!screen`\n"
+            "`!cod`\n"
             "`!tick 1`\n"
+            "`!close 1`\n"
             "`!close all`"
         ),
         inline=False
@@ -211,8 +274,6 @@ async def rok(ctx):
 
     commands_queue[client_id] = "rok"
 
-    print(f"ROK SENT TO {client_id}")
-
     await ctx.send(
         "✅ ROK launched."
     )
@@ -236,35 +297,8 @@ async def cod(ctx):
 
     commands_queue[client_id] = "cod"
 
-    print(f"COD SENT TO {client_id}")
-
     await ctx.send(
         "✅ COD launched."
-    )
-
-# =====================================
-# SCREEN
-# =====================================
-
-@bot.command()
-async def screen(ctx):
-
-    client_id = get_client_id(ctx.author.id)
-
-    if not client_id:
-
-        await ctx.send(
-            "⚠️ Not linked.\nUse `!setup` first."
-        )
-
-        return
-
-    commands_queue[client_id] = "screen bot"
-
-    print(f"SCREEN SENT TO {client_id}")
-
-    await ctx.send(
-        "📸 Screenshot requested."
     )
 
 # =====================================
@@ -286,10 +320,8 @@ async def tick(ctx, number: int):
 
     commands_queue[client_id] = f"tick {number}"
 
-    print(f"TICK SENT TO {client_id}")
-
     await ctx.send(
-        f"✅ Tick sent: {number}"
+        f"✅ Tick command sent: {number}"
     )
 
 # =====================================
@@ -311,10 +343,31 @@ async def close(ctx, target="all"):
 
     commands_queue[client_id] = f"close {target}"
 
-    print(f"CLOSE SENT TO {client_id}")
+    await ctx.send(
+        f"🛑 Close command sent: {target}"
+    )
+
+# =====================================
+# SCREEN
+# =====================================
+
+@bot.command()
+async def screen(ctx):
+
+    client_id = get_client_id(ctx.author.id)
+
+    if not client_id:
+
+        await ctx.send(
+            "⚠️ Not linked.\nUse `!setup` first."
+        )
+
+        return
+
+    commands_queue[client_id] = "screen"
 
     await ctx.send(
-        "🛑 Close command sent."
+        "📸 Screenshot requested."
     )
 
 # =====================================
