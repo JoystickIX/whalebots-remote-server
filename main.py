@@ -76,3 +76,52 @@ uvicorn.run(
     host="0.0.0.0",
     port=int(os.environ.get("PORT", 10000))
 )
+# =====================================
+# COMMAND STORAGE
+# =====================================
+
+commands_queue = {}
+# =====================================
+# GET COMMAND
+# =====================================
+
+@app.get("/command/{client_id}")
+def get_command(client_id: str):
+
+    command = commands_queue.get(client_id)
+
+    if not command:
+
+        return {
+            "command": None
+        }
+
+    commands_queue[client_id] = None
+
+    return {
+        "command": command
+    }
+    # =====================================
+# ROK COMMAND
+# =====================================
+
+@bot.command()
+async def ROK(ctx, client_id):
+
+    commands_queue[client_id] = "ROK"
+
+    await ctx.send(
+        f"ROK sent to {client_id}"
+    )
+    # =====================================
+# COD COMMAND
+# =====================================
+
+@bot.command()
+async def COD(ctx, client_id):
+
+    commands_queue[client_id] = "COD"
+
+    await ctx.send(
+        f"COD sent to {client_id}"
+    )
