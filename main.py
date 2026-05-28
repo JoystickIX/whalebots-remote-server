@@ -1,3 +1,4 @@
+
 # =====================================
 # IMPORTS
 # =====================================
@@ -68,8 +69,6 @@ online_clients = {}
 intents = discord.Intents.default()
 
 intents.message_content = True
-intents.guilds = True
-intents.members = True
 
 bot = commands.Bot(
     command_prefix="!",
@@ -87,7 +86,7 @@ app = FastAPI()
 def home():
 
     return {
-        "status": "WhaleBots Server Online"
+        "status": "online"
     }
 
 # =====================================
@@ -98,8 +97,11 @@ def home():
 def register(data: dict):
 
     client_id = data.get("client_id")
+    pair_code = data.get("pair_code")
 
-    online_clients[client_id] = True
+    online_clients[pair_code] = client_id
+
+    print(f"REGISTERED: {client_id} ({pair_code})")
 
     return {
         "success": True
@@ -112,9 +114,9 @@ def register(data: dict):
 @app.get("/command/{client_id}")
 def get_command(client_id: str):
 
-    command_data = commands_queue.get(client_id)
+    command = commands_queue.get(client_id)
 
-    if not command_data:
+    if not command:
 
         return {
             "command": None
@@ -122,7 +124,9 @@ def get_command(client_id: str):
 
     commands_queue[client_id] = None
 
-    return command_data
+    return {
+        "command": command
+    }
 
 # =====================================
 # SEND STATUS
@@ -131,7 +135,7 @@ def get_command(client_id: str):
 @app.post("/status/{client_id}")
 def send_status(client_id: str, data: dict):
 
-    status_queue[client_id] = data
+    status_queue[client_id] = data.get("message")
 
     return {
         "success": True
@@ -144,9 +148,9 @@ def send_status(client_id: str, data: dict):
 @app.get("/status/{client_id}")
 def get_status(client_id: str):
 
-    data = status_queue.get(client_id)
+    message = status_queue.get(client_id)
 
-    if not data:
+    if not message:
 
         return {
             "message": None
@@ -154,10 +158,12 @@ def get_status(client_id: str):
 
     status_queue[client_id] = None
 
-    return data
+    return {
+        "message": message
+    }
 
 # =====================================
-# BOT READY
+# READY
 # =====================================
 
 @bot.event
@@ -168,7 +174,7 @@ async def on_ready():
     check_status.start()
 
 # =====================================
-# STATUS CHECKER
+# STATUS LOOP
 # =====================================
 
 @tasks.loop(seconds=2)
@@ -199,120 +205,25 @@ async def check_status():
 
                     await channel.send(message)
 
-        except Exception as e:
-
-            print(e)
-
-# =====================================
-# HELP
-# =====================================
-
-@bot.command()
-async def help(ctx):
-
-    data = get_client(ctx.author.id)
-
-    connected_pc = "Not Connected"
-
-    if data:
-
-        connected_pc = data["client_id"]
-
-    embed = discord.Embed(
-        title="🐋 WhaleBots Control Panel",
-        description="Remote control system for WhaleBots",
-        color=0x00b0f4
-    )
-
-    embed.add_field(
-        name="🔗 Setup",
-        value=(
-            "`!setup` → Link your Discord account"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🎮 Game Controls",
-        value=(
-            "`!rok` → Launch Rise of Kingdoms\n"
-            "`!cod` → Launch Call of Dragons"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🖥️ Monitoring",
-        value=(
-            "`!status` → Show running bots\n"
-            "`!screen bot` → Screenshot WhaleBots\n"
-            "`!screen <number>` → Screenshot emulator\n"
-            "Example: `!screen 1`\n"
-            "`!tick <number>` → Toggle selected window\n"
-            "Example: `!tick 1`\n"
-            "`!debugwindows` → Show BlueStacks windows"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="⚙️ System",
-        value=(
-            "`!close all` → Close everything\n"
-            "`!close <number>` → Close selected window\n"
-            "Example: `!close 1`"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Connected PC",
-        value=f"`{connected_pc}`",
-        inline=False
-    )
-
-    embed.set_footer(
-        text="WhaleBots Remote System"
-    )
-
-    await ctx.send(embed=embed)
+        except:
+            pass
 
 # =====================================
 # SETUP
 # =====================================
 
 @bot.command()
-async def setup(ctx):
+async def setup(ctx, pair_code: str):
 
-    # NO ONLINE PCS
-    if len(online_clients) == 0:
+    client_id = online_clients.get(pair_code)
+
+    if not client_id:
 
         await ctx.send(
-            "❌ No online PCs detected."
+            "❌ Invalid pair code."
         )
 
         return
-
-    # MULTIPLE PCS
-    if len(online_clients) > 1:
-
-        pc_list = "\n".join(
-            online_clients.keys()
-        )
-
-        await ctx.send(
-            "⚠️ Multiple PCs detected.\n\n"
-            "Use:\n"
-            "`!setup PCNAME`\n\n"
-            f"Available PCs:\n{pc_list}"
-        )
-
-        return
-
-    # GET FIRST ONLINE PC
-    client_id = list(
-        online_clients.keys()
-    )[0]
 
     links = load_links()
 
@@ -327,6 +238,39 @@ async def setup(ctx):
     await ctx.send(
         f"✅ Linked to `{client_id}`"
     )
+
+# =====================================
+# HELP
+# =====================================
+
+@bot.command()
+async def help(ctx):
+
+    embed = discord.Embed(
+        title="🐋 WhaleBots Control Panel",
+        description="Remote control system for WhaleBots",
+        color=0x00b0f4
+    )
+
+    embed.add_field(
+        name="🔗 Setup",
+        value="`!setup CODE`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎮 Controls",
+        value=(
+            "`!rok`\n"
+            "`!cod`\n"
+            "`!tick 1`\n"
+            "`!close 1`\n"
+            "`!close all`"
+        ),
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
 
 # =====================================
 # GET CLIENT
@@ -350,19 +294,14 @@ async def rok(ctx):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup PCNAME` first."
+            "⚠️ Use `!setup CODE` first."
         )
 
         return
 
-    commands_queue[data["client_id"]] = {
+    commands_queue[data["client_id"]] = "rok"
 
-        "command": "rok"
-    }
-
-    await ctx.send(
-        "⏳ Launching ROK..."
-    )
+    await ctx.send("⏳ Launching ROK...")
 
 # =====================================
 # COD
@@ -376,19 +315,14 @@ async def cod(ctx):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup PCNAME` first."
+            "⚠️ Use `!setup CODE` first."
         )
 
         return
 
-    commands_queue[data["client_id"]] = {
+    commands_queue[data["client_id"]] = "cod"
 
-        "command": "cod"
-    }
-
-    await ctx.send(
-        "⏳ Launching COD..."
-    )
+    await ctx.send("⏳ Launching COD...")
 
 # =====================================
 # TICK
@@ -402,15 +336,12 @@ async def tick(ctx, number: int):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup PCNAME` first."
+            "⚠️ Use `!setup CODE` first."
         )
 
         return
 
-    commands_queue[data["client_id"]] = {
-
-        "command": f"tick {number}"
-    }
+    commands_queue[data["client_id"]] = f"tick {number}"
 
     await ctx.send(
         f"⏳ Checking bot {number}..."
@@ -428,54 +359,16 @@ async def close(ctx, target="all"):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup PCNAME` first."
+            "⚠️ Use `!setup CODE` first."
         )
 
         return
 
-    commands_queue[data["client_id"]] = {
-
-        "command": f"close {target}"
-    }
+    commands_queue[data["client_id"]] = f"close {target}"
 
     await ctx.send(
         f"⏳ Closing {target}..."
     )
-
-# =====================================
-# SCREEN
-# =====================================
-
-@bot.command()
-async def screen(ctx):
-
-    data = get_client(ctx.author.id)
-
-    if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup PCNAME` first."
-        )
-
-        return
-
-    commands_queue[data["client_id"]] = {
-
-        "command": "screen"
-    }
-
-    await ctx.send(
-        "📸 Taking screenshot..."
-    )
-
-# =====================================
-# PING
-# =====================================
-
-@bot.command()
-async def ping(ctx):
-
-    await ctx.send("🏓 Pong!")
 
 # =====================================
 # START BOT
@@ -483,16 +376,7 @@ async def ping(ctx):
 
 def start_bot():
 
-    try:
-
-        print("STARTING DISCORD BOT...")
-
-        bot.run(TOKEN)
-
-    except Exception as e:
-
-        print("DISCORD BOT ERROR:")
-        print(e)
+    bot.run(TOKEN)
 
 # =====================================
 # START EVERYTHING
