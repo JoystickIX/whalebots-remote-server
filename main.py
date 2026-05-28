@@ -208,6 +208,7 @@ async def ping(ctx):
 
 def start_bot():
 
+```
 try:
 
     print("STARTING DISCORD BOT...")
@@ -218,10 +219,27 @@ except Exception as e:
 
     print("DISCORD BOT ERROR:")
     print(e)
+```
+# =====================================
+
+# START EVERYTHING
 
 # =====================================
-# START EVERYTHING
-# =====================================
+
+if **name** == "**main**":
+
+```
+threading.Thread(
+    target=start_bot,
+    daemon=True
+).start()
+
+uvicorn.run(
+    app,
+    host="0.0.0.0",
+    port=int(os.environ.get("PORT", 10000))
+)
+```
 
 if __name__ == "__main__":
 
