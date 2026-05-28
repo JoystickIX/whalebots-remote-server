@@ -18,12 +18,6 @@ import requests
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # =====================================
-# CLIENT ID
-# =====================================
-
-DEFAULT_CLIENT_ID = "Mostafa-Ahmed"
-
-# =====================================
 # FILES
 # =====================================
 
@@ -60,7 +54,7 @@ def save_links(data):
         json.dump(data, f, indent=4)
 
 # =====================================
-# COMMAND STORAGE
+# STORAGE
 # =====================================
 
 commands_queue = {}
@@ -102,9 +96,9 @@ def home():
 @app.get("/command/{client_id}")
 def get_command(client_id: str):
 
-    command = commands_queue.get(client_id)
+    command_data = commands_queue.get(client_id)
 
-    if not command:
+    if not command_data:
 
         return {
             "command": None
@@ -112,9 +106,7 @@ def get_command(client_id: str):
 
     commands_queue[client_id] = None
 
-    return {
-        "command": command
-    }
+    return command_data
 
 # =====================================
 # SEND STATUS
@@ -123,7 +115,7 @@ def get_command(client_id: str):
 @app.post("/status/{client_id}")
 def send_status(client_id: str, data: dict):
 
-    status_queue[client_id] = data.get("message")
+    status_queue[client_id] = data
 
     return {
         "success": True
@@ -136,9 +128,9 @@ def send_status(client_id: str, data: dict):
 @app.get("/status/{client_id}")
 def get_status(client_id: str):
 
-    message = status_queue.get(client_id)
+    data = status_queue.get(client_id)
 
-    if not message:
+    if not data:
 
         return {
             "message": None
@@ -146,9 +138,7 @@ def get_status(client_id: str):
 
     status_queue[client_id] = None
 
-    return {
-        "message": message
-    }
+    return data
 
 # =====================================
 # BOT READY
@@ -170,28 +160,32 @@ async def check_status():
 
     links = load_links()
 
-    for user_id, client_id in links.items():
+    for user_id, data in links.items():
 
         try:
+
+            client_id = data["client_id"]
+            channel_id = data["channel_id"]
 
             response = requests.get(
                 f"https://whalebots-remote-server.onrender.com/status/{client_id}"
             )
 
-            data = response.json()
+            result = response.json()
 
-            message = data.get("message")
+            message = result.get("message")
 
             if message:
 
-                user = await bot.fetch_user(
-                    int(user_id)
-                )
+                channel = bot.get_channel(channel_id)
 
-                await user.send(message)
+                if channel:
 
-        except:
-            pass
+                    await channel.send(message)
+
+        except Exception as e:
+
+            print(e)
 
 # =====================================
 # HELP
@@ -213,13 +207,14 @@ async def help(ctx):
     )
 
     embed.add_field(
-        name="🎮 Game Controls",
+        name="🎮 Commands",
         value=(
             "`!rok`\n"
             "`!cod`\n"
             "`!tick 1`\n"
             "`!close 1`\n"
-            "`!close all`"
+            "`!close all`\n"
+            "`!screen`"
         ),
         inline=False
     )
@@ -233,23 +228,27 @@ async def help(ctx):
 @bot.command()
 async def setup(ctx):
 
-    user_id = str(ctx.author.id)
+    client_id = "Mostafa-Ahmed"
 
     links = load_links()
 
-    links[user_id] = DEFAULT_CLIENT_ID
+    links[str(ctx.author.id)] = {
+
+        "client_id": client_id,
+        "channel_id": ctx.channel.id
+    }
 
     save_links(links)
 
     await ctx.send(
-        f"✅ Linked to `{DEFAULT_CLIENT_ID}`"
+        f"✅ Linked to `{client_id}`"
     )
 
 # =====================================
-# GET LINKED CLIENT
+# GET CLIENT
 # =====================================
 
-def get_client_id(user_id):
+def get_client(user_id):
 
     links = load_links()
 
@@ -262,20 +261,23 @@ def get_client_id(user_id):
 @bot.command()
 async def rok(ctx):
 
-    client_id = get_client_id(ctx.author.id)
+    data = get_client(ctx.author.id)
 
-    if not client_id:
+    if not data:
 
         await ctx.send(
-            "⚠️ Not linked.\nUse `!setup` first."
+            "⚠️ Use `!setup` first."
         )
 
         return
 
-    commands_queue[client_id] = "rok"
+    commands_queue[data["client_id"]] = {
+
+        "command": "rok"
+    }
 
     await ctx.send(
-        "✅ ROK launched."
+        "⏳ Launching ROK..."
     )
 
 # =====================================
@@ -285,20 +287,23 @@ async def rok(ctx):
 @bot.command()
 async def cod(ctx):
 
-    client_id = get_client_id(ctx.author.id)
+    data = get_client(ctx.author.id)
 
-    if not client_id:
+    if not data:
 
         await ctx.send(
-            "⚠️ Not linked.\nUse `!setup` first."
+            "⚠️ Use `!setup` first."
         )
 
         return
 
-    commands_queue[client_id] = "cod"
+    commands_queue[data["client_id"]] = {
+
+        "command": "cod"
+    }
 
     await ctx.send(
-        "✅ COD launched."
+        "⏳ Launching COD..."
     )
 
 # =====================================
@@ -308,17 +313,20 @@ async def cod(ctx):
 @bot.command()
 async def tick(ctx, number: int):
 
-    client_id = get_client_id(ctx.author.id)
+    data = get_client(ctx.author.id)
 
-    if not client_id:
+    if not data:
 
         await ctx.send(
-            "⚠️ Not linked.\nUse `!setup` first."
+            "⚠️ Use `!setup` first."
         )
 
         return
 
-    commands_queue[client_id] = f"tick {number}"
+    commands_queue[data["client_id"]] = {
+
+        "command": f"tick {number}"
+    }
 
     await ctx.send(
         f"⏳ Checking bot {number}..."
@@ -331,20 +339,23 @@ async def tick(ctx, number: int):
 @bot.command()
 async def close(ctx, target="all"):
 
-    client_id = get_client_id(ctx.author.id)
+    data = get_client(ctx.author.id)
 
-    if not client_id:
+    if not data:
 
         await ctx.send(
-            "⚠️ Not linked.\nUse `!setup` first."
+            "⚠️ Use `!setup` first."
         )
 
         return
 
-    commands_queue[client_id] = f"close {target}"
+    commands_queue[data["client_id"]] = {
+
+        "command": f"close {target}"
+    }
 
     await ctx.send(
-        f"🛑 Close command sent: {target}"
+        f"⏳ Closing {target}..."
     )
 
 # =====================================
@@ -354,20 +365,23 @@ async def close(ctx, target="all"):
 @bot.command()
 async def screen(ctx):
 
-    client_id = get_client_id(ctx.author.id)
+    data = get_client(ctx.author.id)
 
-    if not client_id:
+    if not data:
 
         await ctx.send(
-            "⚠️ Not linked.\nUse `!setup` first."
+            "⚠️ Use `!setup` first."
         )
 
         return
 
-    commands_queue[client_id] = "screen"
+    commands_queue[data["client_id"]] = {
+
+        "command": "screen"
+    }
 
     await ctx.send(
-        "📸 Screenshot requested."
+        "📸 Taking screenshot..."
     )
 
 # =====================================
