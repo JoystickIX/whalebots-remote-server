@@ -1,762 +1,466 @@
-import asyncio
-import pyautogui
-import pygetwindow as gw
-from PIL import ImageGrab
+import discord
+from discord.ext import commands, tasks
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException
+from pydantic import BaseModel
+import threading
+import uvicorn
 import os
+import json
 import requests
-import socket
-import random
-import logging
-import ctypes
-import tkinter as tk
-from tkinter import messagebox
+import datetime
+import secrets
 
-# =====================================
-# LOGGING
-# =====================================
+TOKEN      = os.getenv("DISCORD_TOKEN")
+API_SECRET = os.getenv("ADMIN_API_SECRET", "changeme-please-set-this")
+OWNER_ID   = 316613385485680650
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("client.log", encoding="utf-8")
-    ]
+LINKS_FILE    = "links.json"
+LICENSES_FILE = "licenses.json"
+
+if not os.path.exists(LINKS_FILE):
+    with open(LINKS_FILE, "w") as f:
+        json.dump({}, f, indent=4)
+
+if not os.path.exists(LICENSES_FILE):
+    with open(LICENSES_FILE, "w") as f:
+        json.dump({}, f, indent=4)
+
+def load_links():
+    with open(LINKS_FILE, "r") as f:
+        return json.load(f)
+
+def save_links(data):
+    with open(LINKS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+def load_licenses():
+    with open(LICENSES_FILE, "r") as f:
+        return json.load(f)
+
+def save_licenses(data):
+    with open(LICENSES_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+commands_queue = {}
+status_queue   = {}
+online_clients = {}
+image_queue    = {}
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds           = True
+intents.members          = True
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    help_command=None
 )
-log = logging.getLogger("WhaleBots")
 
-DEBUG = False
-
-# =====================================
-# CONFIG
-# =====================================
-
-CONFIG_FILE = "config.txt"
-
-def load_server_url():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            url = f.read().strip()
-            if url:
-                log.info(f"SERVER URL loaded: {url}")
-                return url
-    log.warning("config.txt not found. Using default SERVER_URL.")
-    return "https://whalebots-remote-server.onrender.com"
-
-SERVER_URL = load_server_url()
-CLIENT_ID  = socket.gethostname()
+app = FastAPI()
 
 # =====================================
-# PAIR CODE
+# PYDANTIC MODELS
 # =====================================
 
-PAIR_FILE = "pair_code.txt"
+class RegisterBody(BaseModel):
+    client_id: str
+    pair_code: str
 
-def load_or_create_pair_code():
-    if os.path.exists(PAIR_FILE):
-        with open(PAIR_FILE, "r") as f:
-            code = f.read().strip()
-        if code.isdigit() and len(code) == 6:
-            log.info(f"PAIR CODE loaded: {code}")
-            return code
-    code = str(random.randint(100000, 999999))
-    with open(PAIR_FILE, "w") as f:
-        f.write(code)
-    log.info(f"PAIR CODE generated: {code}")
-    return code
+class StatusBody(BaseModel):
+    message: str
 
-PAIR_CODE = load_or_create_pair_code()
+class LicenseValidateBody(BaseModel):
+    key: str
+    client_id: str
+
+class LicenseKeyBody(BaseModel):
+    key: str
 
 # =====================================
-# LICENSE
+# ENDPOINTS
 # =====================================
 
-LICENSE_FILE = "license.txt"
+@app.get("/")
+def home():
+    return {"status": "WhaleBots Server Online"}
 
-def load_license_key():
-    if not os.path.exists(LICENSE_FILE):
-        show_popup_error(
-            "License Missing",
-            "license.txt not found.\n\nCreate license.txt and paste your license key inside."
-        )
-        raise SystemExit(1)
+@app.post("/register")
+def register(body: RegisterBody):
+    if not body.client_id or not body.pair_code:
+        return {"success": False}
+    online_clients[body.pair_code] = body.client_id
+    print(f"REGISTERED: {body.client_id} ({body.pair_code})")
+    return {"success": True}
 
-    with open(LICENSE_FILE, "r") as f:
-        key = f.read().strip().upper()
+@app.get("/command/{client_id}")
+def get_command(client_id: str):
+    command = commands_queue.get(client_id)
+    if not command:
+        return {"command": None}
+    commands_queue[client_id] = None
+    return {"command": command}
 
-    if not key:
-        show_popup_error(
-            "License Empty",
-            "license.txt is empty.\n\nPaste your license key inside license.txt."
-        )
-        raise SystemExit(1)
+@app.post("/status/{client_id}")
+def receive_status(client_id: str, body: StatusBody):
+    status_queue[client_id] = body.message
+    return {"success": True}
 
-    return key
+@app.get("/status/{client_id}")
+def get_status(client_id: str):
+    message = status_queue.get(client_id)
+    if not message:
+        return {"message": None}
+    status_queue[client_id] = None
+    return {"message": message}
+
+@app.post("/upload/{client_id}")
+async def upload_image(
+    client_id: str,
+    file: UploadFile = File(...)
+):
+    content = await file.read()
+    image_queue[client_id] = content
+    return {"success": True}
+
+@app.post("/license/validate")
+def validate_license(body: LicenseValidateBody):
+    key       = body.key.strip().upper()
+    client_id = body.client_id
+
+    licenses = load_licenses()
+
+    if key not in licenses:
+        print(f"LICENSE INVALID: {key} not found")
+        return {"valid": False, "reason": "Invalid license key."}
+
+    entry = licenses[key]
+
+    if not entry.get("active", False):
+        print(f"LICENSE DISABLED: {key}")
+        return {"valid": False, "reason": "License is disabled."}
+
+    expires = entry.get("expires")
+    if expires:
+        expiry_date = datetime.date.fromisoformat(expires)
+        if datetime.date.today() > expiry_date:
+            print(f"LICENSE EXPIRED: {key}")
+            return {"valid": False, "reason": "License has expired."}
+
+    bound = entry.get("bound_client")
+    if bound is None:
+        licenses[key]["bound_client"] = client_id
+        save_licenses(licenses)
+        print(f"LICENSE BOUND: {key} → {client_id}")
+    elif bound != client_id:
+        print(f"LICENSE CONFLICT: {key} bound to {bound}, attempted by {client_id}")
+        return {"valid": False, "reason": "License is already activated on another PC."}
+
+    print(f"LICENSE OK: {key} for {client_id}")
+    return {
+        "valid":    True,
+        "expires":  expires or "lifetime",
+        "customer": entry.get("customer", "")
+    }
+
+@app.post("/admin/revoke")
+def revoke_license(
+    body: LicenseKeyBody,
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    if api_key != API_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+    key      = body.key.strip().upper()
+    licenses = load_licenses()
+    if key not in licenses:
+        return {"success": False, "reason": "Key not found."}
+    licenses[key]["active"] = False
+    save_licenses(licenses)
+    print(f"LICENSE REVOKED: {key}")
+    return {"success": True}
+
+@app.post("/admin/reset")
+def reset_license(
+    body: LicenseKeyBody,
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    if api_key != API_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+    key      = body.key.strip().upper()
+    licenses = load_licenses()
+    if key not in licenses:
+        return {"success": False, "reason": "Key not found."}
+    licenses[key]["bound_client"] = None
+    save_licenses(licenses)
+    print(f"LICENSE RESET (unbound): {key}")
+    return {"success": True}
+
+@app.get("/admin/licenses")
+def list_licenses(
+    api_key: str = Header(..., alias="X-API-Key")
+):
+    if api_key != API_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+    return load_licenses()
 
 # =====================================
-# POPUPS
+# DISCORD EVENTS
 # =====================================
 
-def show_popup_error(title, message):
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror(f"WhaleBots — {title}", message)
-    root.destroy()
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    check_status.start()
+    check_images.start()
 
-def show_popup_info(title, message):
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showinfo(f"WhaleBots — {title}", message)
-    root.destroy()
-
-def show_pair_code(code):
-    show_popup_info(
-        "Pair Code",
-        f"Your Pair Code:\n\n{code}\n\nSend this to the bot owner to get connected."
-    )
-
-# =====================================
-# STARTUP LOG
-# =====================================
-
-LICENSE_KEY = load_license_key()
-
-log.info("=" * 40)
-log.info("WhaleBots Remote Client")
-log.info("=" * 40)
-log.info(f"PC NAME   : {CLIENT_ID}")
-log.info(f"PAIR CODE : {PAIR_CODE}")
-log.info(f"LICENSE   : ****-****-****-{LICENSE_KEY[-4:]}")
-log.info("=" * 40)
-
-# =====================================
-# STATE
-# =====================================
-
-active_game = None
-
-# =====================================
-# SERVER COMMUNICATION
-# =====================================
-
-async def validate_license():
-    log.info("Validating license...")
-    try:
-        response = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: requests.post(
-                f"{SERVER_URL}/license/validate",
-                json={
-                    "key":       LICENSE_KEY,
-                    "client_id": CLIENT_ID
-                },
-                timeout=10
-            )
-        )
-        result = response.json()
-
-        if result.get("valid"):
-            expires  = result.get("expires", "lifetime")
-            customer = result.get("customer", "")
-            log.info("LICENSE VALID ✅")
-            log.info(f"Customer : {customer}")
-            log.info(f"Expires  : {expires}")
-            return True
-        else:
-            reason = result.get("reason", "Unknown error.")
-            log.critical(f"LICENSE REJECTED ❌ — {reason}")
-            show_popup_error("License Rejected", f"License rejected:\n\n{reason}")
-            return False
-
-    except Exception as e:
-        log.critical(f"LICENSE CHECK FAILED: {e}")
-        show_popup_error("Connection Failed", f"Could not reach license server:\n\n{e}")
-        return False
-
-async def register_client(retries=3, delay=5):
-    for attempt in range(1, retries + 1):
+@tasks.loop(seconds=2)
+async def check_status():
+    links = load_links()
+    for user_id, data in links.items():
         try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: requests.post(
-                    f"{SERVER_URL}/register",
-                    json={
-                        "client_id": CLIENT_ID,
-                        "pair_code": PAIR_CODE
-                    },
-                    timeout=10
-                )
+            client_id  = data["client_id"]
+            channel_id = data["channel_id"]
+            response   = requests.get(
+                f"https://whalebots-remote-server.onrender.com/status/{client_id}"
             )
-            log.info(f"REGISTERED: {CLIENT_ID}")
-            return True
+            result  = response.json()
+            message = result.get("message")
+            if message:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(message)
         except Exception as e:
-            log.warning(f"REGISTER attempt {attempt}/{retries} failed: {e}")
-            if attempt < retries:
-                await asyncio.sleep(delay)
-    log.error("REGISTER FAILED after all attempts.")
-    return False
+            print(e)
 
-async def send_status(message):
-    try:
-        await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: requests.post(
-                f"{SERVER_URL}/status/{CLIENT_ID}",
-                json={"message": message},
-                timeout=10
-            )
-        )
-        log.info(f"STATUS SENT: {message}")
-    except Exception as e:
-        log.error(f"SEND STATUS ERROR: {e}")
-
-async def send_image(path):
-    try:
-        def _upload():
-            with open(path, "rb") as f:
-                requests.post(
-                    f"{SERVER_URL}/upload/{CLIENT_ID}",
-                    files={"file": f},
-                    timeout=10
-                )
-        await asyncio.get_event_loop().run_in_executor(None, _upload)
-        log.info(f"IMAGE SENT: {path}")
-    except Exception as e:
-        log.error(f"UPLOAD ERROR: {e}")
-
-async def get_command():
-    try:
-        response = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: requests.get(
-                f"{SERVER_URL}/command/{CLIENT_ID}",
-                timeout=10
-            )
-        )
-        return response.json().get("command")
-    except Exception as e:
-        log.error(f"GET COMMAND ERROR: {e}")
-        return None
-
-# =====================================
-# WINDOW UTILITIES
-# =====================================
-
-_hwnd_cache = {}
-
-def force_foreground(hwnd):
-    user32   = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-    SW_RESTORE = 9
-    try:
-        current_thread = kernel32.GetCurrentThreadId()
-        fg_hwnd        = user32.GetForegroundWindow()
-        if fg_hwnd == hwnd:
-            return True
-        fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None)
-        attached  = user32.AttachThreadInput(current_thread, fg_thread, True)
-        user32.ShowWindow(hwnd, SW_RESTORE)
-        user32.SetForegroundWindow(hwnd)
-        user32.BringWindowToTop(hwnd)
-        user32.SetFocus(hwnd)
-        if attached:
-            user32.AttachThreadInput(current_thread, fg_thread, False)
-        return user32.GetForegroundWindow() == hwnd
-    except Exception as e:
-        log.error(f"FORCE FOREGROUND ERROR: {e}")
-        return False
-
-def get_hwnd_by_keywords(label, keywords):
-    global _hwnd_cache
-    user32 = ctypes.windll.user32
-
-    cached = _hwnd_cache.get(label)
-    if cached is not None:
-        if user32.IsWindow(cached):
-            return cached
-        else:
-            log.info(f"Cached HWND [{label}] invalid. Re-scanning.")
-            _hwnd_cache[label] = None
-
-    found_hwnd = []
-
-    def enum_callback(hwnd, _):
-        if user32.IsWindowVisible(hwnd):
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length > 0:
-                buf = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(hwnd, buf, length + 1)
-                title = buf.value.lower()
-                if any(kw in title for kw in keywords):
-                    found_hwnd.append(hwnd)
-        return True
-
-    WNDENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_bool,
-        ctypes.POINTER(ctypes.c_int),
-        ctypes.POINTER(ctypes.c_int)
-    )
-    user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
-
-    if found_hwnd:
-        _hwnd_cache[label] = found_hwnd[0]
-        log.info(f"HWND CACHED [{label}]: {found_hwnd[0]}")
-        return found_hwnd[0]
-
-    return None
-
-def get_emulator_window(number):
-    all_titles = gw.getAllTitles()
-    target     = str(number)
-
-    if DEBUG:
-        log.debug("ALL DETECTED WINDOWS:")
-        for title in all_titles:
-            log.debug(repr(title))
-
-    for title in all_titles:
-        clean = title.strip().lower()
-        if not clean:
-            continue
-        if target in clean:
-            windows = gw.getWindowsWithTitle(title)
-            if windows:
-                log.info(f"FOUND EMULATOR WINDOW: {title}")
-                return windows[0]
-    return None
-
-async def focus_whalebots():
-    all_titles    = gw.getAllTitles()
-    target_window = None
-
-    for title in all_titles:
-        lower = title.lower()
-        if "rise of kingdoms bot" in lower or "call of dragons bot" in lower:
-            windows = gw.getWindowsWithTitle(title)
-            if windows:
-                target_window = windows[0]
-                break
-
-    if not target_window:
-        log.warning("WHALEBOTS WINDOW NOT FOUND")
-        return None
-
-    hwnd = get_hwnd_by_keywords(
-        "whalebots",
-        ["rise of kingdoms bot", "call of dragons bot"]
-    )
-    if not hwnd:
-        log.warning("WHALEBOTS HWND NOT FOUND")
-        return None
-
-    if target_window.isMinimized:
-        target_window.restore()
-        await asyncio.sleep(0.3)
-
-    force_foreground(hwnd)
-    await asyncio.sleep(0.4)
-
-    pyautogui.moveTo(
-        x=target_window.left + 120,
-        y=target_window.top  + 120
-    )
-    await asyncio.sleep(0.2)
-
-    return target_window
-
-async def focus_launcher():
-    all_titles    = gw.getAllTitles()
-    target_window = None
-
-    for title in all_titles:
-        lower = title.lower()
-        if (
-            "whale" in lower and
-            "rise of kingdoms bot" not in lower and
-            "call of dragons bot"  not in lower
-        ):
-            windows = gw.getWindowsWithTitle(title)
-            if windows:
-                target_window = windows[0]
-                break
-
-    if not target_window:
-        log.warning("LAUNCHER WINDOW NOT FOUND")
-        return None
-
-    hwnd = get_hwnd_by_keywords("launcher", ["whale bots", "whalebots"])
-
-    if not hwnd:
+@tasks.loop(seconds=2)
+async def check_images():
+    links = load_links()
+    for user_id, data in links.items():
         try:
-            if target_window.isMinimized:
-                target_window.restore()
-                await asyncio.sleep(0.3)
-            target_window.activate()
-            await asyncio.sleep(0.8)
+            client_id  = data["client_id"]
+            channel_id = data["channel_id"]
+            image      = image_queue.get(client_id)
+            if image:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    with open("temp.png", "wb") as f:
+                        f.write(image)
+                    await channel.send(file=discord.File("temp.png"))
+                image_queue[client_id] = None
         except Exception as e:
-            log.error(f"LAUNCHER FALLBACK FOCUS ERROR: {e}")
-        return target_window
-
-    if target_window.isMinimized:
-        target_window.restore()
-        await asyncio.sleep(0.3)
-
-    force_foreground(hwnd)
-    await asyncio.sleep(0.6)
-
-    log.info(f"LAUNCHER FOCUSED: {target_window.title}")
-    return target_window
-
-async def focus_window_safe(window):
-    try:
-        if window.isMinimized:
-            window.restore()
-            await asyncio.sleep(0.3)
-        window.activate()
-        await asyncio.sleep(0.8)
-        log.info(f"SAFE FOCUS: {window.title}")
-    except Exception as e:
-        log.error(f"SAFE FOCUS ERROR: {e}")
+            print(e)
 
 # =====================================
-# WHALEBOTS FINDER
+# HELPERS
 # =====================================
 
-def find_whalebots():
-    desktop       = os.path.join(os.path.expanduser("~"), "Desktop")
-    possible_files = [
-        "WhaleBots.lnk",
-        "Whale Bots.lnk",
-        "WhaleBots.exe",
-        "Whale Bots.exe"
-    ]
-    for file in possible_files:
-        full_path = os.path.join(desktop, file)
-        if os.path.exists(full_path):
-            return full_path
-    return None
+def get_client(user_id):
+    links = load_links()
+    return links.get(str(user_id))
+
+def get_license_info(client_id):
+    licenses = load_licenses()
+    for key, entry in licenses.items():
+        if entry.get("bound_client") == client_id:
+            return key, entry
+    return None, None
+
+def get_license_by_discord_id(discord_id):
+    licenses = load_licenses()
+    for key, entry in licenses.items():
+        if str(entry.get("discord_id", "")) == str(discord_id):
+            return key, entry
+    return None, None
 
 # =====================================
 # COMMANDS
 # =====================================
 
-async def ROK():
-    global active_game
-    try:
-        if active_game == "cod":
-            await send_status("⚠️ COD is running. Closing everything first...")
-            await close_all()
-            await send_status("✅ Closed. Launching ROK now...")
+@bot.command()
+async def help(ctx):
+    data         = get_client(ctx.author.id)
+    connected_pc = data["client_id"] if data else "Not Connected"
 
-        whalebot_path = find_whalebots()
-        if not whalebot_path:
-            await send_status("❌ WhaleBots not found on Desktop.")
-            return
-
-        os.startfile(whalebot_path)
-        await asyncio.sleep(8)
-
-        window = await focus_launcher()
-        if not window:
-            await send_status("❌ Launcher window not found.")
-            return
-
-        all_titles = gw.getAllTitles()
-        still_open = any("whale" in t.lower() for t in all_titles)
-        if not still_open:
-            await send_status("❌ Launcher closed unexpectedly.")
-            return
-
-        click_x = window.left + 162
-        click_y = window.top  + 194
-        log.info(f"ROK CLICK → x={click_x}, y={click_y}")
-        pyautogui.click(x=click_x, y=click_y)
-        active_game = "rok"
-        await send_status("✅ ROK launched.")
-
-    except Exception as e:
-        log.error(f"ROK ERROR: {e}")
-
-async def COD():
-    global active_game
-    try:
-        if active_game == "rok":
-            await send_status("⚠️ ROK is running. Closing everything first...")
-            await close_all()
-            await send_status("✅ Closed. Launching COD now...")
-
-        whalebot_path = find_whalebots()
-        if not whalebot_path:
-            await send_status("❌ WhaleBots not found on Desktop.")
-            return
-
-        os.startfile(whalebot_path)
-        await asyncio.sleep(8)
-
-        window = await focus_launcher()
-        if not window:
-            await send_status("❌ Launcher window not found.")
-            return
-
-        all_titles = gw.getAllTitles()
-        still_open = any("whale" in t.lower() for t in all_titles)
-        if not still_open:
-            await send_status("❌ Launcher closed unexpectedly.")
-            return
-
-        click_x = window.left + 476
-        click_y = window.top  + 191
-        log.info(f"COD CLICK → x={click_x}, y={click_y}")
-        pyautogui.click(x=click_x, y=click_y)
-        active_game = "cod"
-        await send_status("✅ COD launched.")
-
-    except Exception as e:
-        log.error(f"COD ERROR: {e}")
-
-async def screen(target="bot"):
-    try:
-        if target == "bot":
-            window = await focus_whalebots()
-            if not window:
-                await send_status("❌ WhaleBots window not found.")
-                return
-            screenshot = ImageGrab.grab(bbox=(
-                window.left, window.top,
-                window.right, window.bottom
-            ))
-            filename = "bot_window.png"
-            screenshot.save(filename)
-            await send_image(filename)
-            await send_status("📸 WhaleBots screenshot sent.")
-            return
-
-        target_window = get_emulator_window(target)
-        if not target_window:
-            await send_status(f"❌ Emulator {target} not found.")
-            return
-
-        await focus_window_safe(target_window)
-        screenshot = ImageGrab.grab(bbox=(
-            target_window.left, target_window.top,
-            target_window.right, target_window.bottom
-        ))
-        filename = f"emulator_{target}.png"
-        screenshot.save(filename)
-        await send_image(filename)
-        await send_status(f"📸 Emulator {target} screenshot sent.")
-
-    except Exception as e:
-        log.error(f"SCREEN ERROR: {e}")
-
-async def tick(number):
-    try:
-        log.info(f"TICK START — bot {number}")
-
-        visible_rows = 6
-        start_y      = 42
-        spacing      = 22
-
-        window = await focus_whalebots()
-        if not window:
-            await send_status("❌ Bot window not found.")
-            return
-
-        for _ in range(25):
-            pyautogui.scroll(700)
-            await asyncio.sleep(0.02)
-
-        await asyncio.sleep(0.3)
-
-        successful_scrolls = 0
-
-        if number > visible_rows:
-            scroll_steps = number - visible_rows
-
-            for _ in range(scroll_steps):
-                before = ImageGrab.grab(bbox=(
-                    window.right - 12, window.top   + 25,
-                    window.right - 4,  window.bottom - 25
-                ))
-
-                pyautogui.scroll(-700)
-                await asyncio.sleep(0.4)
-
-                after = ImageGrab.grab(bbox=(
-                    window.right - 12, window.top   + 25,
-                    window.right - 4,  window.bottom - 25
-                ))
-
-                if list(before.getdata()) == list(after.getdata()):
-                    existing = visible_rows + successful_scrolls
-                    await send_status(
-                        f"❌ Bot {number} does not exist.\n"
-                        f"Only {existing} bots available."
-                    )
-                    return
-
-                successful_scrolls += 1
-
-        window = await focus_whalebots()
-        if not window:
-            await send_status("❌ Bot window lost before tick click.")
-            return
-
-        visible_index = visible_rows if number > visible_rows else number
-        checkbox_y    = start_y + ((visible_index - 1) * spacing)
-        click_x       = window.left + 14
-        click_y       = window.top  + checkbox_y
-
-        log.info(f"TICK CLICK → x={click_x}, y={click_y} (row {visible_index}, bot {number})")
-
-        await asyncio.sleep(0.2)
-        pyautogui.click(x=click_x, y=click_y)
-        await asyncio.sleep(0.2)
-
-        await send_status(f"✅ Ticked bot {number}")
-
-    except Exception as e:
-        log.error(f"TICK ERROR: {e}")
-
-async def kill_process(name):
-    try:
-        await asyncio.create_subprocess_shell(
-            f'taskkill /f /im "{name}"',
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
-    except Exception as e:
-        log.error(f"KILL PROCESS ERROR ({name}): {e}")
-
-async def close_all():
-    log.info("CLOSE ALL — killing all processes")
-    await asyncio.gather(
-        kill_process("WhaleBots.exe"),
-        kill_process("HD-Player.exe"),
-        kill_process("Bluestacks.exe"),
-        kill_process("BlueStacks.exe"),
-        kill_process("BlueStacks X.exe")
+    embed = discord.Embed(
+        title="🐋 WhaleBots Control Panel",
+        description="Remote control system for WhaleBots",
+        color=0x00b0f4
     )
-    await asyncio.sleep(3)
-    log.info("CLOSE ALL — done")
+    embed.add_field(name="🔗 Setup",        value="`!setup CODE`",                                                                  inline=False)
+    embed.add_field(name="🎮 Game Controls", value="`!rok` → Launch ROK\n`!cod` → Launch COD",                                      inline=False)
+    embed.add_field(name="🖥️ Monitoring",   value="`!screen bot` / `!screen <number>`\n`!tick <number>`",                          inline=False)
+    embed.add_field(name="⚙️ System",       value="`!close all` / `!close <number>`",                                              inline=False)
+    embed.add_field(name="🔑 Licence",      value="`!licence` → Check status",                                                     inline=False)
+    embed.add_field(name="Connected PC",    value=f"`{connected_pc}`",                                                             inline=False)
+    await ctx.send(embed=embed)
 
-async def close_account(window, number, visible_rows, start_y, spacing):
-    visible_index = number
+@bot.command()
+async def setup(ctx, pair_code: str):
+    client_id = online_clients.get(pair_code)
+    if not client_id:
+        await ctx.send("❌ Invalid pair code.")
+        return
+    links = load_links()
+    links[str(ctx.author.id)] = {
+        "client_id":  client_id,
+        "channel_id": ctx.channel.id
+    }
+    save_links(links)
+    await ctx.send(f"✅ Linked to `{client_id}`")
 
-    if number > visible_rows:
-        scroll_steps = number - visible_rows
-        for _ in range(scroll_steps):
-            pyautogui.scroll(-700)
-            await asyncio.sleep(0.2)
-        visible_index = visible_rows
+@bot.command()
+async def rok(ctx):
+    data = get_client(ctx.author.id)
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+    commands_queue[data["client_id"]] = "rok"
+    await ctx.send("⏳ Launching ROK...")
 
-    row_y   = start_y + ((visible_index - 1) * spacing)
-    click_x = window.left + 40
-    click_y = window.top  + row_y
+@bot.command()
+async def cod(ctx):
+    data = get_client(ctx.author.id)
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+    commands_queue[data["client_id"]] = "cod"
+    await ctx.send("⏳ Launching COD...")
 
-    pyautogui.rightClick(x=click_x, y=click_y)
-    await asyncio.sleep(0.3)
+@bot.command()
+async def screen(ctx, target="bot"):
+    data = get_client(ctx.author.id)
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+    commands_queue[data["client_id"]] = f"screen {target}"
+    await ctx.send(f"📸 Taking screenshot of {target}...")
 
-    pyautogui.click(x=click_x + 40, y=click_y + 65)
-    await asyncio.sleep(0.5)
+@bot.command()
+async def tick(ctx, number: int):
+    data = get_client(ctx.author.id)
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+    commands_queue[data["client_id"]] = f"tick {number}"
+    await ctx.send(f"⏳ Ticking bot {number}...")
 
-    pyautogui.click(x=window.left + 260, y=window.top + 360)
-    await send_status(f"🛑 Closed bot {number}")
+@bot.command()
+async def close(ctx, target="all"):
+    data = get_client(ctx.author.id)
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+    commands_queue[data["client_id"]] = f"close {target}"
+    await ctx.send(f"⏳ Closing {target}...")
 
-async def close(target="all"):
-    global active_game
+@bot.command()
+async def licence(ctx, member: discord.Member = None, days: int = None):
+
+    if member is not None and days is not None:
+        if ctx.author.id != OWNER_ID:
+            await ctx.send("❌ Only the owner can issue licences.")
+            return
+
+        raw = secrets.token_hex(8).upper()
+        key = f"{raw[0:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:16]}"
+
+        if days > 0:
+            expires         = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+            expires_display = f"{expires} ({days} days)"
+        else:
+            expires         = None
+            expires_display = "Lifetime"
+
+        licenses = load_licenses()
+        licenses[key] = {
+            "active":       True,
+            "expires":      expires,
+            "bound_client": None,
+            "customer":     str(member),
+            "discord_id":   str(member.id)
+        }
+        save_licenses(licenses)
+        print(f"LICENCE ISSUED: {key} → {member} ({member.id}) expires={expires or 'lifetime'}")
+
+        try:
+            dm_embed = discord.Embed(
+                title="🔑 Your WhaleBots Licence Key",
+                description="Paste this key into `license.txt` next to `123.py` on your PC.",
+                color=0x00b04f
+            )
+            dm_embed.add_field(name="Key",            value=f"```{key}```",   inline=False)
+            dm_embed.add_field(name="Expires",        value=expires_display,  inline=True)
+            dm_embed.add_field(name="How to activate",
+                value="1. Create `license.txt` next to `123.py`\n2. Paste your key inside\n3. Run `123.py`",
+                inline=False
+            )
+            await member.send(embed=dm_embed)
+            dm_status = "✅ Key sent via DM"
+        except discord.Forbidden:
+            dm_status = "⚠️ Could not DM user (DMs disabled)"
+
+        masked_key    = f"****-****-****-{key[-4:]}"
+        confirm_embed = discord.Embed(title="✅ Licence Issued", color=0x00b04f)
+        confirm_embed.add_field(name="User",       value=member.mention,   inline=True)
+        confirm_embed.add_field(name="Key",        value=f"`{masked_key}`",inline=True)
+        confirm_embed.add_field(name="Expires",    value=expires_display,  inline=True)
+        confirm_embed.add_field(name="DM Status",  value=dm_status,        inline=False)
+        await ctx.send(embed=confirm_embed)
+        return
+
+    if member is not None and days is None:
+        await ctx.send("⚠️ Usage: `!licence @user 30` or `!licence @user 0` for lifetime.")
+        return
+
+    data = get_client(ctx.author.id)
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+
+    client_id  = data["client_id"]
+    key, entry = get_license_info(client_id)
+
+    if not key:
+        key, entry = get_license_by_discord_id(ctx.author.id)
+
+    if not key:
+        embed = discord.Embed(title="🔑 Licence Status", color=0xff4444)
+        embed.add_field(name="Status", value="❌ No licence found for your account.", inline=False)
+        await ctx.send(embed=embed)
+        return
+
+    masked_key = f"****-****-****-{key[-4:]}"
+    active      = entry.get("active", False)
+    expires     = entry.get("expires") or "Lifetime"
+    customer    = entry.get("customer", "—")
+
+    is_expired = False
+    if entry.get("expires"):
+        if datetime.date.today() > datetime.date.fromisoformat(entry["expires"]):
+            is_expired = True
+
+    status_text = "✅ Active" if (active and not is_expired) else "❌ Inactive / Expired"
+    embed_color = 0x00b04f  if (active and not is_expired) else 0xff4444
+
+    embed = discord.Embed(title="🔑 Licence Status", color=embed_color)
+    embed.add_field(name="Status",   value=status_text,      inline=True)
+    embed.add_field(name="Key",      value=f"`{masked_key}`",inline=True)
+    embed.add_field(name="Expires",  value=expires,          inline=True)
+    embed.add_field(name="Customer", value=customer,         inline=True)
+    embed.add_field(name="Bound PC", value=f"`{client_id}`", inline=True)
+    await ctx.send(embed=embed)
+
+# =====================================
+# START
+# =====================================
+
+def start_bot():
     try:
-        if target == "all":
-            await close_all()
-            active_game = None
-            await send_status("🛑 All WhaleBots and BlueStacks windows closed.")
-            return
-
-        window = await focus_whalebots()
-        if not window:
-            await send_status("❌ Bot window not found.")
-            return
-
-        visible_rows = 6
-        start_y      = 42
-        spacing      = 22
-
-        pyautogui.moveTo(window.left + 120, window.top + 120)
-        await asyncio.sleep(0.5)
-
-        for _ in range(25):
-            pyautogui.scroll(700)
-            await asyncio.sleep(0.02)
-
-        await asyncio.sleep(0.5)
-
-        await close_account(window, int(target), visible_rows, start_y, spacing)
-
+        print("STARTING DISCORD BOT...")
+        bot.run(TOKEN)
     except Exception as e:
-        log.error(f"CLOSE ERROR: {e}")
+        print("DISCORD BOT ERROR:", e)
 
-# =====================================
-# MAIN LOOP
-# =====================================
-
-async def main():
-    log.info(f"CLIENT ONLINE: {CLIENT_ID}")
-
-    # Step 1 — Validate license
-    license_ok = await validate_license()
-    if not license_ok:
-        log.critical("Shutting down — license check failed.")
-        return
-
-    # Step 2 — Register with server
-    registered = await register_client()
-    if not registered:
-        log.critical("Shutting down — could not register with server.")
-        return
-
-    # Step 3 — Show pair code AFTER registration
-    show_pair_code(PAIR_CODE)
-
-    last_register_time  = asyncio.get_event_loop().time()
-    REREGISTER_INTERVAL = 300
-
-    log.info("Listening for commands...")
-
-    try:
-        while True:
-            now = asyncio.get_event_loop().time()
-            if now - last_register_time >= REREGISTER_INTERVAL:
-                log.info("Re-registering with server...")
-                await register_client()
-                last_register_time = now
-
-            command = await get_command()
-
-            if command:
-                log.info(f"COMMAND RECEIVED: {command}")
-
-                if command == "rok":
-                    await ROK()
-
-                elif command == "cod":
-                    await COD()
-
-                elif command.startswith("screen"):
-                    split = command.split(" ")
-                    await screen(split[1] if len(split) > 1 else "bot")
-
-                elif command.startswith("tick"):
-                    split = command.split(" ")
-                    if len(split) > 1:
-                        await tick(int(split[1]))
-
-                elif command.startswith("close"):
-                    split = command.split(" ")
-                    await close(split[1] if len(split) > 1 else "all")
-
-            await asyncio.sleep(2)
-
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        log.info("Client shutting down. Goodbye.")
-
-asyncio.run(main())
+if __name__ == "__main__":
+    threading.Thread(target=start_bot, daemon=True).start()
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
