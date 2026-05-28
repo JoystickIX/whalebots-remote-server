@@ -304,7 +304,6 @@ async def cod(ctx):
 # =====================================
 # TICK
 # =====================================
-
 @bot.command()
 async def tick(ctx, number: int):
 
@@ -321,7 +320,7 @@ async def tick(ctx, number: int):
     commands_queue[client_id] = f"tick {number}"
 
     await ctx.send(
-        f"✅ Tick command sent: {number}"
+        f"⏳ Checking bot {number}..."
     )
 
 # =====================================
