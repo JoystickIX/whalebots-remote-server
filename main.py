@@ -304,6 +304,7 @@ async def cod(ctx):
 # =====================================
 # TICK
 # =====================================
+
 @bot.command()
 async def tick(ctx, number: int):
 
