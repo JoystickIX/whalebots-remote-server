@@ -201,11 +201,13 @@ async def ping(ctx):
     await ctx.send("🏓 Pong!")
 
 # =====================================
+
 # START BOT
+
 # =====================================
 
 def start_bot():
-    
+
 try:
 
     print("STARTING DISCORD BOT...")
@@ -216,6 +218,7 @@ except Exception as e:
 
     print("DISCORD BOT ERROR:")
     print(e)
+
 # =====================================
 # START EVERYTHING
 # =====================================
