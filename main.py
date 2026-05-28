@@ -18,7 +18,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 commands_queue = {}
 
 # =====================================
-# DISCORD BOT
+# DISCORD
 # =====================================
 
 intents = discord.Intents.default()
@@ -68,7 +68,7 @@ def get_command(client_id: str):
     }
 
 # =====================================
-# DISCORD READY
+# BOT READY
 # =====================================
 
 @bot.event
@@ -77,35 +77,39 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
 # =====================================
-# PING
+# HELP
 # =====================================
 
 @bot.command()
-async def ping(ctx):
+async def help(ctx):
 
-    await ctx.send("🏓 Pong!")
+    await ctx.send(
+        "Commands:\n"
+        "!ROK <client>\n"
+        "!COD <client>"
+    )
 
 # =====================================
-# ROK COMMAND
+# ROK
 # =====================================
 
 @bot.command()
 async def ROK(ctx, client_id):
 
-    commands_queue[client_id] = "ROK"
+    commands_queue[client_id] = "rok"
 
     await ctx.send(
         f"ROK sent to {client_id}"
     )
 
 # =====================================
-# COD COMMAND
+# COD
 # =====================================
 
 @bot.command()
 async def COD(ctx, client_id):
 
-    commands_queue[client_id] = "COD"
+    commands_queue[client_id] = "cod"
 
     await ctx.send(
         f"COD sent to {client_id}"
