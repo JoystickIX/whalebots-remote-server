@@ -17,6 +17,12 @@ import json
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # =====================================
+# CLIENT ID
+# =====================================
+
+DEFAULT_CLIENT_ID = "Mostafa-Ahmed"
+
+# =====================================
 # FILES
 # =====================================
 
@@ -168,12 +174,12 @@ async def setup(ctx):
 
     links = load_links()
 
-    links[user_id] = ctx.author.name
+    links[user_id] = DEFAULT_CLIENT_ID
 
     save_links(links)
 
     await ctx.send(
-        f"✅ Linked to `{ctx.author.name}`"
+        f"✅ Linked to `{DEFAULT_CLIENT_ID}`"
     )
 
 # =====================================
