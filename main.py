@@ -59,6 +59,7 @@ def save_links(data):
 
 commands_queue = {}
 status_queue = {}
+online_clients = {}
 
 # =====================================
 # DISCORD SETTINGS
@@ -87,6 +88,21 @@ def home():
 
     return {
         "status": "WhaleBots Server Online"
+    }
+
+# =====================================
+# REGISTER CLIENT
+# =====================================
+
+@app.post("/register")
+def register(data: dict):
+
+    client_id = data.get("client_id")
+
+    online_clients[client_id] = True
+
+    return {
+        "success": True
     }
 
 # =====================================
@@ -202,7 +218,7 @@ async def help(ctx):
 
     embed.add_field(
         name="⚙️ Setup",
-        value="`!setup`",
+        value="`!setup PCNAME`",
         inline=False
     )
 
@@ -226,9 +242,16 @@ async def help(ctx):
 # =====================================
 
 @bot.command()
-async def setup(ctx):
+async def setup(ctx, client_id: str):
 
-    client_id = "Mostafa-Ahmed"
+    # CHECK CLIENT ONLINE
+    if client_id not in online_clients:
+
+        await ctx.send(
+            f"❌ PC `{client_id}` is offline."
+        )
+
+        return
 
     links = load_links()
 
@@ -266,7 +289,7 @@ async def rok(ctx):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup` first."
+            "⚠️ Use `!setup PCNAME` first."
         )
 
         return
@@ -292,7 +315,7 @@ async def cod(ctx):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup` first."
+            "⚠️ Use `!setup PCNAME` first."
         )
 
         return
@@ -318,7 +341,7 @@ async def tick(ctx, number: int):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup` first."
+            "⚠️ Use `!setup PCNAME` first."
         )
 
         return
@@ -344,7 +367,7 @@ async def close(ctx, target="all"):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup` first."
+            "⚠️ Use `!setup PCNAME` first."
         )
 
         return
@@ -370,7 +393,7 @@ async def screen(ctx):
     if not data:
 
         await ctx.send(
-            "⚠️ Use `!setup` first."
+            "⚠️ Use `!setup PCNAME` first."
         )
 
         return
