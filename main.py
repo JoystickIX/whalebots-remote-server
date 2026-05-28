@@ -306,39 +306,65 @@ async def help(ctx):
         color=0x00b0f4
     )
 
+    # =====================================
+    # SETUP
+    # =====================================
+
     embed.add_field(
         name="🔗 Setup",
-        value="`!setup CODE`",
+        value=(
+            "`!setup CODE` → Link your Discord account"
+        ),
         inline=False
     )
+
+    # =====================================
+    # GAME CONTROLS
+    # =====================================
 
     embed.add_field(
         name="🎮 Game Controls",
         value=(
-            "`!rok`\n"
-            "`!cod`"
+            "`!rok` → Launch Rise of Kingdoms\n"
+            "`!cod` → Launch Call of Dragons"
         ),
         inline=False
     )
+
+    # =====================================
+    # MONITORING
+    # =====================================
 
     embed.add_field(
         name="🖥️ Monitoring",
         value=(
-            "`!screen bot`\n"
-            "`!screen 1`\n"
-            "`!tick 1`"
+            "`!screen bot` → Screenshot WhaleBots\n"
+            "`!screen <number>` → Screenshot emulator\n"
+            "Example: `!screen 1`\n\n"
+
+            "`!tick <number>` → Toggle selected window\n"
+            "Example: `!tick 1`"
         ),
         inline=False
     )
 
+    # =====================================
+    # SYSTEM
+    # =====================================
+
     embed.add_field(
         name="⚙️ System",
         value=(
-            "`!close all`\n"
-            "`!close 1`"
+            "`!close all` → Close everything\n"
+            "`!close <number>` → Close selected window\n"
+            "Example: `!close 1`"
         ),
         inline=False
     )
+
+    # =====================================
+    # CONNECTED PC
+    # =====================================
 
     embed.add_field(
         name="Connected PC",
