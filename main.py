@@ -25,6 +25,27 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 LINKS_FILE = "links.json"
 
 # =====================================
+# LICENCE
+# =====================================
+
+@bot.command()
+async def licence(ctx):
+
+    data = get_client(ctx.author.id)
+
+    if not data:
+
+        await ctx.send(
+            "⚠️ Use `!setup CODE` first."
+        )
+
+        return
+
+    await ctx.send(
+        "✅ Your licence is active."
+    )
+
+# =====================================
 # CREATE LINKS FILE
 # =====================================
 
