@@ -36,11 +36,9 @@ LINKS_FILE = "links.json"
 
 if not os.path.exists(LINKS_FILE):
 
-```
 with open(LINKS_FILE, "w") as f:
 
     json.dump({}, f, indent=4)
-```
 
 # =====================================
 
@@ -49,12 +47,10 @@ with open(LINKS_FILE, "w") as f:
 # =====================================
 
 def load_links():
-
-```
+    
 with open(LINKS_FILE, "r") as f:
 
     return json.load(f)
-```
 
 # =====================================
 
@@ -64,11 +60,9 @@ with open(LINKS_FILE, "r") as f:
 
 def save_links(data):
 
-```
 with open(LINKS_FILE, "w") as f:
 
     json.dump(data, f, indent=4)
-```
 
 # =====================================
 
@@ -107,11 +101,9 @@ app = FastAPI()
 @app.get("/")
 def home():
 
-```
 return {
     "status": "WhaleBots Server Online"
 }
-```
 
 # =====================================
 
@@ -122,7 +114,6 @@ return {
 @app.get("/command/{client_id}")
 def get_command(client_id: str):
 
-```
 command = commands_queue.get(client_id)
 
 if not command:
@@ -136,7 +127,6 @@ commands_queue[client_id] = None
 return {
     "command": command
 }
-```
 
 # =====================================
 
@@ -147,9 +137,7 @@ return {
 @bot.event
 async def on_ready():
 
-```
 print(f"Logged in as {bot.user}")
-```
 
 # =====================================
 
@@ -160,7 +148,6 @@ print(f"Logged in as {bot.user}")
 @bot.command()
 async def help(ctx):
 
-```
 embed = discord.Embed(
     title="🐋 WhaleBots Remote Panel",
     description="Remote cloud control system",
@@ -193,7 +180,6 @@ embed.add_field(
 )
 
 await ctx.send(embed=embed)
-```
 
 # =====================================
 
@@ -204,7 +190,6 @@ await ctx.send(embed=embed)
 @bot.command()
 async def setup(ctx):
 
-```
 user_id = str(ctx.author.id)
 
 links = load_links()
@@ -216,7 +201,6 @@ save_links(links)
 await ctx.send(
     f"✅ Linked to `{ctx.author.name}`"
 )
-```
 
 # =====================================
 
@@ -226,11 +210,9 @@ await ctx.send(
 
 def get_client_id(user_id):
 
-```
 links = load_links()
 
 return links.get(str(user_id))
-```
 
 # =====================================
 
@@ -241,7 +223,6 @@ return links.get(str(user_id))
 @bot.command()
 async def rok(ctx):
 
-```
 client_id = get_client_id(ctx.author.id)
 
 if not client_id:
@@ -259,7 +240,6 @@ print(f"ROK SENT TO {client_id}")
 await ctx.send(
     "✅ ROK launched."
 )
-```
 
 # =====================================
 
@@ -270,7 +250,6 @@ await ctx.send(
 @bot.command()
 async def cod(ctx):
 
-```
 client_id = get_client_id(ctx.author.id)
 
 if not client_id:
@@ -288,7 +267,6 @@ print(f"COD SENT TO {client_id}")
 await ctx.send(
     "✅ COD launched."
 )
-```
 
 # =====================================
 
@@ -299,7 +277,6 @@ await ctx.send(
 @bot.command()
 async def screen(ctx):
 
-```
 client_id = get_client_id(ctx.author.id)
 
 if not client_id:
@@ -317,7 +294,6 @@ print(f"SCREEN SENT TO {client_id}")
 await ctx.send(
     "📸 Screenshot requested."
 )
-```
 
 # =====================================
 
@@ -328,7 +304,6 @@ await ctx.send(
 @bot.command()
 async def tick(ctx, number: int):
 
-```
 client_id = get_client_id(ctx.author.id)
 
 if not client_id:
@@ -346,7 +321,6 @@ print(f"TICK SENT TO {client_id}")
 await ctx.send(
     f"✅ Tick sent: {number}"
 )
-```
 
 # =====================================
 
@@ -357,7 +331,6 @@ await ctx.send(
 @bot.command()
 async def close(ctx, target="all"):
 
-```
 client_id = get_client_id(ctx.author.id)
 
 if not client_id:
@@ -375,7 +348,6 @@ print(f"CLOSE SENT TO {client_id}")
 await ctx.send(
     "🛑 Close command sent."
 )
-```
 
 # =====================================
 
@@ -386,9 +358,7 @@ await ctx.send(
 @bot.command()
 async def ping(ctx):
 
-```
 await ctx.send("🏓 Pong!")
-```
 
 # =====================================
 
@@ -398,7 +368,6 @@ await ctx.send("🏓 Pong!")
 
 def start_bot():
 
-```
 try:
 
     print("STARTING DISCORD BOT...")
@@ -409,7 +378,6 @@ except Exception as e:
 
     print("DISCORD BOT ERROR:")
     print(e)
-```
 
 # =====================================
 
@@ -419,7 +387,6 @@ except Exception as e:
 
 if **name** == "**main**":
 
-```
 threading.Thread(
     target=start_bot,
     daemon=True
