@@ -30,7 +30,7 @@ OWNER_ID = 316613385485680650
 LATEST_VERSION = "1.0.1"
 
 EXE_DOWNLOAD_LINK = (
-    "https://YOUR-DIRECT-EXE-DOWNLOAD-LINK"
+    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.1/WhaleBotsRemote.exe"
 )
 
 # =====================================
