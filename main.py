@@ -210,29 +210,69 @@ async def check_status():
 @bot.command()
 async def help(ctx):
 
+    data = get_client(ctx.author.id)
+
+    connected_pc = "Not Connected"
+
+    if data:
+
+        connected_pc = data["client_id"]
+
     embed = discord.Embed(
-        title="🐋 WhaleBots Remote Panel",
-        description="Remote cloud control system",
+        title="🐋 WhaleBots Control Panel",
+        description="Remote control system for WhaleBots",
         color=0x00b0f4
     )
 
     embed.add_field(
-        name="⚙️ Setup",
-        value="`!setup PCNAME`",
+        name="🔗 Setup",
+        value=(
+            "`!setup` → Link your Discord account"
+        ),
         inline=False
     )
 
     embed.add_field(
-        name="🎮 Commands",
+        name="🎮 Game Controls",
         value=(
-            "`!rok`\n"
-            "`!cod`\n"
-            "`!tick 1`\n"
-            "`!close 1`\n"
-            "`!close all`\n"
-            "`!screen`"
+            "`!rok` → Launch Rise of Kingdoms\n"
+            "`!cod` → Launch Call of Dragons"
         ),
         inline=False
+    )
+
+    embed.add_field(
+        name="🖥️ Monitoring",
+        value=(
+            "`!status` → Show running bots\n"
+            "`!screen bot` → Screenshot WhaleBots\n"
+            "`!screen <number>` → Screenshot emulator\n"
+            "Example: `!screen 1`\n"
+            "`!tick <number>` → Toggle selected window\n"
+            "Example: `!tick 1`\n"
+            "`!debugwindows` → Show BlueStacks windows"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="⚙️ System",
+        value=(
+            "`!close all` → Close everything\n"
+            "`!close <number>` → Close selected window\n"
+            "Example: `!close 1`"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Connected PC",
+        value=f"`{connected_pc}`",
+        inline=False
+    )
+
+    embed.set_footer(
+        text="WhaleBots Remote System"
     )
 
     await ctx.send(embed=embed)
