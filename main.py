@@ -1,3 +1,4 @@
+````python
 # =====================================
 # IMPORTS
 # =====================================
@@ -273,10 +274,6 @@ def validate_license(
 
     if key not in licenses:
 
-        print(
-            f"LICENSE INVALID: {key}"
-        )
-
         return {
 
             "valid": False,
@@ -294,7 +291,7 @@ def validate_license(
             "valid": False,
 
             "reason":
-            "License is disabled."
+            "License disabled."
         }
 
     expires = entry.get("expires")
@@ -342,41 +339,6 @@ def validate_license(
 
         "customer":
         entry.get("customer", "")
-    }
-
-# =====================================
-# ADMIN RESET
-# =====================================
-
-@app.post("/admin/reset")
-def reset_license(
-    body: LicenseKeyBody,
-    api_key: str = Header(..., alias="X-API-Key")
-):
-
-    if api_key != API_SECRET:
-
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid API key."
-        )
-
-    key = body.key.strip().upper()
-
-    licenses = load_licenses()
-
-    if key not in licenses:
-
-        return {
-            "success": False
-        }
-
-    licenses[key]["bound_client"] = None
-
-    save_licenses(licenses)
-
-    return {
-        "success": True
     }
 
 # =====================================
@@ -781,7 +743,7 @@ async def licence(
 
         else:
 
-            expires = None
+            expires = "Lifetime"
 
         licenses = load_licenses()
 
@@ -789,7 +751,8 @@ async def licence(
 
             "active": True,
 
-            "expires": expires,
+            "expires":
+            None if expires == "Lifetime" else expires,
 
             "bound_client": None,
 
@@ -800,9 +763,30 @@ async def licence(
 
         save_licenses(licenses)
 
-        await ctx.send(
-            f"✅ Licence created for {member}\n```{key}```"
+        embed = discord.Embed(
+            title="✅ Licence Issued",
+            color=0x00b04f
         )
+
+        embed.add_field(
+            name="User",
+            value=member.mention,
+            inline=True
+        )
+
+        embed.add_field(
+            name="Key",
+            value=f"```{key}```",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Expires",
+            value=expires,
+            inline=True
+        )
+
+        await ctx.send(embed=embed)
 
         try:
 
@@ -916,3 +900,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 10000))
     )
+````
