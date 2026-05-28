@@ -205,9 +205,16 @@ async def ping(ctx):
 # =====================================
 
 def start_bot():
+try:
+
+    print("STARTING DISCORD BOT...")
 
     bot.run(TOKEN)
 
+except Exception as e:
+
+    print("DISCORD BOT ERROR:")
+    print(e)
 # =====================================
 # START EVERYTHING
 # =====================================
