@@ -1,3 +1,8 @@
+```python
+# =====================================
+# IMPORTS
+# =====================================
+
 import discord
 from discord.ext import commands
 from fastapi import FastAPI
@@ -18,7 +23,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 commands_queue = {}
 
 # =====================================
-# DISCORD
+# DISCORD SETTINGS
 # =====================================
 
 intents = discord.Intents.default()
@@ -83,23 +88,48 @@ async def on_ready():
 @bot.command()
 async def help(ctx):
 
-    await ctx.send(
-        "Commands:\n"
-        "!ROK <client>\n"
-        "!COD <client>"
+    embed = discord.Embed(
+        title="🐋 WhaleBots Remote Panel",
+        description="Remote cloud control system",
+        color=0x00b0f4
     )
+
+    embed.add_field(
+        name="🎮 Game Controls",
+        value=(
+            "`!rok <client>`\n"
+            "`!cod <client>`"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🖥️ Monitoring",
+        value=(
+            "`!screen <client>`\n"
+            "`!screen <client> 1`\n"
+            "`!tick <client> 1`\n"
+            "`!close <client> all`\n"
+            "`!close <client> 1`"
+        ),
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
 
 # =====================================
 # ROK
 # =====================================
 
 @bot.command()
-async def ROK(ctx, client_id):
+async def rok(ctx, client_id):
 
     commands_queue[client_id] = "rok"
 
+    print(f"ROK SENT TO {client_id}")
+
     await ctx.send(
-        f"ROK sent to {client_id}"
+        f"✅ ROK sent to `{client_id}`"
     )
 
 # =====================================
@@ -107,13 +137,69 @@ async def ROK(ctx, client_id):
 # =====================================
 
 @bot.command()
-async def COD(ctx, client_id):
+async def cod(ctx, client_id):
 
     commands_queue[client_id] = "cod"
 
+    print(f"COD SENT TO {client_id}")
+
     await ctx.send(
-        f"COD sent to {client_id}"
+        f"✅ COD sent to `{client_id}`"
     )
+
+# =====================================
+# SCREEN
+# =====================================
+
+@bot.command()
+async def screen(ctx, client_id, target="bot"):
+
+    commands_queue[client_id] = f"screen {target}"
+
+    print(f"SCREEN SENT TO {client_id}")
+
+    await ctx.send(
+        f"📸 Screen command sent to `{client_id}`"
+    )
+
+# =====================================
+# TICK
+# =====================================
+
+@bot.command()
+async def tick(ctx, client_id, number: int):
+
+    commands_queue[client_id] = f"tick {number}"
+
+    print(f"TICK SENT TO {client_id}")
+
+    await ctx.send(
+        f"✅ Tick command sent to `{client_id}`"
+    )
+
+# =====================================
+# CLOSE
+# =====================================
+
+@bot.command()
+async def close(ctx, client_id, target="all"):
+
+    commands_queue[client_id] = f"close {target}"
+
+    print(f"CLOSE SENT TO {client_id}")
+
+    await ctx.send(
+        f"🛑 Close command sent to `{client_id}`"
+    )
+
+# =====================================
+# PING
+# =====================================
+
+@bot.command()
+async def ping(ctx):
+
+    await ctx.send("🏓 Pong!")
 
 # =====================================
 # START BOT
@@ -139,3 +225,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 10000))
     )
+```
