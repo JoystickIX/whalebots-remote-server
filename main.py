@@ -69,6 +69,8 @@ online_clients = {}
 intents = discord.Intents.default()
 
 intents.message_content = True
+intents.guilds = True
+intents.members = True
 
 bot = commands.Bot(
     command_prefix="!",
@@ -86,7 +88,7 @@ app = FastAPI()
 def home():
 
     return {
-        "status": "online"
+        "status": "WhaleBots Server Online"
     }
 
 # =====================================
@@ -98,6 +100,12 @@ def register(data: dict):
 
     client_id = data.get("client_id")
     pair_code = data.get("pair_code")
+
+    if not client_id or not pair_code:
+
+        return {
+            "success": False
+        }
 
     online_clients[pair_code] = client_id
 
@@ -163,7 +171,7 @@ def get_status(client_id: str):
     }
 
 # =====================================
-# READY
+# BOT READY
 # =====================================
 
 @bot.event
@@ -174,7 +182,7 @@ async def on_ready():
     check_status.start()
 
 # =====================================
-# STATUS LOOP
+# STATUS CHECKER
 # =====================================
 
 @tasks.loop(seconds=2)
@@ -205,8 +213,78 @@ async def check_status():
 
                     await channel.send(message)
 
-        except:
-            pass
+        except Exception as e:
+
+            print(e)
+
+# =====================================
+# HELP
+# =====================================
+
+@bot.command()
+async def help(ctx):
+
+    data = get_client(ctx.author.id)
+
+    connected_pc = "Not Connected"
+
+    if data:
+
+        connected_pc = data["client_id"]
+
+    embed = discord.Embed(
+        title="🐋 WhaleBots Control Panel",
+        description="Remote control system for WhaleBots",
+        color=0x00b0f4
+    )
+
+    embed.add_field(
+        name="🔗 Setup",
+        value=(
+            "`!setup CODE` → Link your Discord account"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎮 Game Controls",
+        value=(
+            "`!rok` → Launch Rise of Kingdoms\n"
+            "`!cod` → Launch Call of Dragons"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🖥️ Monitoring",
+        value=(
+            "`!tick <number>` → Toggle selected window\n"
+            "Example: `!tick 1`"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="⚙️ System",
+        value=(
+            "`!close all` → Close everything\n"
+            "`!close <number>` → Close selected window\n"
+            "Example: `!close 1`"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Connected PC",
+        value=f"`{connected_pc}`",
+        inline=False
+    )
+
+    embed.set_footer(
+        text="WhaleBots Remote System"
+    )
+
+    await ctx.send(embed=embed)
 
 # =====================================
 # SETUP
@@ -240,39 +318,6 @@ async def setup(ctx, pair_code: str):
     )
 
 # =====================================
-# HELP
-# =====================================
-
-@bot.command()
-async def help(ctx):
-
-    embed = discord.Embed(
-        title="🐋 WhaleBots Control Panel",
-        description="Remote control system for WhaleBots",
-        color=0x00b0f4
-    )
-
-    embed.add_field(
-        name="🔗 Setup",
-        value="`!setup CODE`",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🎮 Controls",
-        value=(
-            "`!rok`\n"
-            "`!cod`\n"
-            "`!tick 1`\n"
-            "`!close 1`\n"
-            "`!close all`"
-        ),
-        inline=False
-    )
-
-    await ctx.send(embed=embed)
-
-# =====================================
 # GET CLIENT
 # =====================================
 
@@ -301,7 +346,9 @@ async def rok(ctx):
 
     commands_queue[data["client_id"]] = "rok"
 
-    await ctx.send("⏳ Launching ROK...")
+    await ctx.send(
+        "⏳ Launching ROK..."
+    )
 
 # =====================================
 # COD
@@ -322,7 +369,9 @@ async def cod(ctx):
 
     commands_queue[data["client_id"]] = "cod"
 
-    await ctx.send("⏳ Launching COD...")
+    await ctx.send(
+        "⏳ Launching COD..."
+    )
 
 # =====================================
 # TICK
@@ -371,12 +420,30 @@ async def close(ctx, target="all"):
     )
 
 # =====================================
+# PING
+# =====================================
+
+@bot.command()
+async def ping(ctx):
+
+    await ctx.send("🏓 Pong!")
+
+# =====================================
 # START BOT
 # =====================================
 
 def start_bot():
 
-    bot.run(TOKEN)
+    try:
+
+        print("STARTING DISCORD BOT...")
+
+        bot.run(TOKEN)
+
+    except Exception as e:
+
+        print("DISCORD BOT ERROR:")
+        print(e)
 
 # =====================================
 # START EVERYTHING
