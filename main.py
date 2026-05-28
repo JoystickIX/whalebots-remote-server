@@ -1,11 +1,11 @@
-
+```python
 # =====================================
 # IMPORTS
 # =====================================
 
 import discord
 from discord.ext import commands, tasks
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 import threading
 import uvicorn
 import os
@@ -61,6 +61,7 @@ def save_links(data):
 commands_queue = {}
 status_queue = {}
 online_clients = {}
+image_queue = {}
 
 # =====================================
 # DISCORD SETTINGS
@@ -171,6 +172,24 @@ def get_status(client_id: str):
     }
 
 # =====================================
+# UPLOAD SCREENSHOT
+# =====================================
+
+@app.post("/upload/{client_id}")
+async def upload_image(
+    client_id: str,
+    file: UploadFile = File(...)
+):
+
+    content = await file.read()
+
+    image_queue[client_id] = content
+
+    return {
+        "success": True
+    }
+
+# =====================================
 # BOT READY
 # =====================================
 
@@ -180,6 +199,7 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
     check_status.start()
+    check_images.start()
 
 # =====================================
 # STATUS CHECKER
@@ -218,6 +238,54 @@ async def check_status():
             print(e)
 
 # =====================================
+# IMAGE CHECKER
+# =====================================
+
+@tasks.loop(seconds=2)
+async def check_images():
+
+    links = load_links()
+
+    for user_id, data in links.items():
+
+        try:
+
+            client_id = data["client_id"]
+            channel_id = data["channel_id"]
+
+            image = image_queue.get(client_id)
+
+            if image:
+
+                channel = bot.get_channel(channel_id)
+
+                if channel:
+
+                    with open("temp.png", "wb") as f:
+
+                        f.write(image)
+
+                    await channel.send(
+                        file=discord.File("temp.png")
+                    )
+
+                image_queue[client_id] = None
+
+        except Exception as e:
+
+            print(e)
+
+# =====================================
+# GET CLIENT
+# =====================================
+
+def get_client(user_id):
+
+    links = load_links()
+
+    return links.get(str(user_id))
+
+# =====================================
 # HELP
 # =====================================
 
@@ -240,17 +308,15 @@ async def help(ctx):
 
     embed.add_field(
         name="🔗 Setup",
-        value=(
-            "`!setup CODE` → Link your Discord account"
-        ),
+        value="`!setup CODE`",
         inline=False
     )
 
     embed.add_field(
         name="🎮 Game Controls",
         value=(
-            "`!rok` → Launch Rise of Kingdoms\n"
-            "`!cod` → Launch Call of Dragons"
+            "`!rok`\n"
+            "`!cod`"
         ),
         inline=False
     )
@@ -258,8 +324,9 @@ async def help(ctx):
     embed.add_field(
         name="🖥️ Monitoring",
         value=(
-            "`!tick <number>` → Toggle selected window\n"
-            "Example: `!tick 1`"
+            "`!screen bot`\n"
+            "`!screen 1`\n"
+            "`!tick 1`"
         ),
         inline=False
     )
@@ -267,9 +334,8 @@ async def help(ctx):
     embed.add_field(
         name="⚙️ System",
         value=(
-            "`!close all` → Close everything\n"
-            "`!close <number>` → Close selected window\n"
-            "Example: `!close 1`"
+            "`!close all`\n"
+            "`!close 1`"
         ),
         inline=False
     )
@@ -278,10 +344,6 @@ async def help(ctx):
         name="Connected PC",
         value=f"`{connected_pc}`",
         inline=False
-    )
-
-    embed.set_footer(
-        text="WhaleBots Remote System"
     )
 
     await ctx.send(embed=embed)
@@ -316,16 +378,6 @@ async def setup(ctx, pair_code: str):
     await ctx.send(
         f"✅ Linked to `{client_id}`"
     )
-
-# =====================================
-# GET CLIENT
-# =====================================
-
-def get_client(user_id):
-
-    links = load_links()
-
-    return links.get(str(user_id))
 
 # =====================================
 # ROK
@@ -371,6 +423,29 @@ async def cod(ctx):
 
     await ctx.send(
         "⏳ Launching COD..."
+    )
+
+# =====================================
+# SCREEN
+# =====================================
+
+@bot.command()
+async def screen(ctx, target="bot"):
+
+    data = get_client(ctx.author.id)
+
+    if not data:
+
+        await ctx.send(
+            "⚠️ Use `!setup CODE` first."
+        )
+
+        return
+
+    commands_queue[data["client_id"]] = f"screen {target}"
+
+    await ctx.send(
+        f"📸 Taking screenshot of {target}..."
     )
 
 # =====================================
@@ -420,15 +495,6 @@ async def close(ctx, target="all"):
     )
 
 # =====================================
-# PING
-# =====================================
-
-@bot.command()
-async def ping(ctx):
-
-    await ctx.send("🏓 Pong!")
-
-# =====================================
 # START BOT
 # =====================================
 
@@ -461,3 +527,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 10000))
     )
+```
