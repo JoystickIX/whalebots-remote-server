@@ -440,13 +440,53 @@ async def help(ctx):
 
     embed.add_field(
         name="License",
-        value="`!license` - Check status",
+        value=(
+            "`!license` - Check status\n"
+            "`!license @user <days>` - Issue / extend license\n"
+            "`!rmlicense @user` - Revoke license\n"
+            "`!reducelicense @user <days>` - Reduce license by days"
+        ),
         inline=False
     )
 
     embed.add_field(
         name="Connected PC",
         value=f"`{connected_pc}`",
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
+
+# =====================================
+# HELP OWNER
+# =====================================
+
+@bot.command()
+async def helpowner(ctx):
+    if ctx.author.id not in OWNER_IDS:
+        await ctx.send("❌ Access denied.")
+        return
+
+    embed = discord.Embed(
+        title="WhaleBots Owner Panel",
+        description="Owner-only commands",
+        color=0xffa500
+    )
+
+    embed.add_field(
+        name="License Management",
+        value=(
+            "`!license @user <days>` - Issue new license or extend existing\n"
+            "`!license @user 0` - Issue lifetime license\n"
+            "`!rmlicense @user` - Revoke a license\n"
+            "`!reducelicense @user <days>` - Reduce license by X days"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Client Overview",
+        value="`!clients` - List all active subscribers",
         inline=False
     )
 
@@ -687,6 +727,72 @@ async def license(
     embed.add_field(name="Expires", value=expires,          inline=True)
     embed.add_field(name="PC",      value=f"`{client_id}`", inline=False)
 
+    await ctx.send(embed=embed)
+
+# =====================================
+# REVOKE LICENSE
+# =====================================
+
+@bot.command()
+async def rmlicense(ctx, member: discord.Member = None):
+    if ctx.author.id not in OWNER_IDS:
+        await ctx.send("❌ Only owner can remove licenses.")
+        return
+
+    if member is None:
+        await ctx.send("Usage: `!rmlicense @user`")
+        return
+
+    key, entry = get_license_by_discord(member.id)
+
+    if entry is None:
+        await ctx.send(f"❌ No license found for {member.mention}.")
+        return
+
+    _licenses_col.update_one({"_id": key}, {"$set": {"active": False}})
+
+    embed = discord.Embed(title="🚫 License Revoked", color=0xff0000)
+    embed.add_field(name="User", value=member.mention, inline=True)
+    await ctx.send(embed=embed)
+
+# =====================================
+# REDUCE LICENSE
+# =====================================
+
+@bot.command()
+async def reducelicense(ctx, member: discord.Member = None, days: int = None):
+    if ctx.author.id not in OWNER_IDS:
+        await ctx.send("❌ Only owner can reduce licenses.")
+        return
+
+    if member is None or days is None:
+        await ctx.send("Usage: `!reducelicense @user <days>`")
+        return
+
+    if days <= 0:
+        await ctx.send("❌ Days must be a positive number.")
+        return
+
+    key, entry = get_license_by_discord(member.id)
+
+    if entry is None:
+        await ctx.send(f"❌ No license found for {member.mention}.")
+        return
+
+    current_expires = entry.get("expires")
+
+    if current_expires is None:
+        await ctx.send(f"❌ {member.mention} has a Lifetime license — set an expiry first with `!license @user <days>`.")
+        return
+
+    expiry_date = datetime.date.fromisoformat(current_expires)
+    new_expires = (expiry_date - datetime.timedelta(days=days)).isoformat()
+
+    _licenses_col.update_one({"_id": key}, {"$set": {"expires": new_expires}})
+
+    embed = discord.Embed(title="✂️ License Reduced", color=0xffa500)
+    embed.add_field(name="User",        value=member.mention, inline=True)
+    embed.add_field(name="New Expiry",  value=new_expires,    inline=True)
     await ctx.send(embed=embed)
 
 # =====================================
