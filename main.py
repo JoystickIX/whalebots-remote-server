@@ -44,8 +44,9 @@ EXE_DOWNLOAD_LINK = (
 
 _mongo_client = MongoClient(MONGO_URI)
 _db           = _mongo_client["whalebots"]
-_licenses_col = _db["licenses"]
-_links_col    = _db["links"]
+_licenses_col  = _db["licenses"]
+_links_col     = _db["links"]
+_paircodes_col = _db["pair_codes"]
 
 # =====================================
 # LOAD / SAVE
@@ -168,6 +169,20 @@ def register(body: RegisterBody):
     print(f"REGISTERED: {body.client_id} ({body.pair_code})")
 
     return {"success": True}
+
+# =====================================
+# PAIR CODE
+# =====================================
+
+@app.get("/pair_code/{client_id}")
+def get_pair_code(client_id: str):
+    import random
+    doc = _paircodes_col.find_one({"_id": client_id})
+    if doc:
+        return {"pair_code": doc["pair_code"]}
+    code = str(random.randint(100000, 999999))
+    _paircodes_col.insert_one({"_id": client_id, "pair_code": code})
+    return {"pair_code": code}
 
 # =====================================
 # COMMAND
