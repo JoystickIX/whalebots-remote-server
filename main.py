@@ -430,7 +430,9 @@ async def help(ctx):
             "`!screen <number>` - Screenshot emulator\n"
             "Example: `!screen 1`\n\n"
             "`!tick <number>` - Toggle selected window\n"
-            "Example: `!tick 1`"
+            "Example: `!tick 1`\n\n"
+            "`!log <number>` - Read activity log for a bot\n"
+            "Example: `!log 1`"
         ),
         inline=False
     )
@@ -566,6 +568,22 @@ async def screen(ctx, target="bot"):
     commands_queue[data["client_id"]] = {"command": f"screen {target}", "queued_at": time.time()}
 
     await ctx.send(f"📸 Taking screenshot of {target}...")
+
+# =====================================
+# LOG
+# =====================================
+
+@bot.command()
+async def log(ctx, number: int):
+    data = get_client(ctx.author.id)
+
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+
+    commands_queue[data["client_id"]] = {"command": f"log {number}", "queued_at": time.time()}
+
+    await ctx.send(f"📋 Fetching activity log for bot {number}...")
 
 # =====================================
 # TICK
