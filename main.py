@@ -1,4 +1,4 @@
-﻿# =====================================
+# =====================================
 # IMPORTS
 # =====================================
 
@@ -618,12 +618,11 @@ async def license(
             display_expires = new_expires or "Lifetime"
 
             embed = discord.Embed(
-                title="ðŸ”„ license Extended",
+                title=”🔄 License Extended”,
                 color=0x00b04f
             )
-            embed.add_field(name="User",        value=member.mention,           inline=True)
-            embed.add_field(name="Key",         value=f"`****-****-****-{key[-4:]}`", inline=False)
-            embed.add_field(name="New Expiry",  value=display_expires,          inline=True)
+            embed.add_field(name=”User”,       value=member.mention,  inline=True)
+            embed.add_field(name=”New Expiry”, value=display_expires, inline=True)
 
             await ctx.send(embed=embed)
             return
@@ -653,22 +652,14 @@ async def license(
         display_expires = expires or "Lifetime"
 
         embed = discord.Embed(
-            title="âœ… license Issued",
+            title=”✅ License Issued”,
             color=0x00b04f
         )
 
-        embed.add_field(name="User",    value=member.mention,  inline=True)
-        embed.add_field(name="Key",     value=f"```{key}```",  inline=False)
-        embed.add_field(name="Expires", value=display_expires, inline=True)
+        embed.add_field(name=”User”,    value=member.mention,  inline=True)
+        embed.add_field(name=”Expires”, value=display_expires, inline=True)
 
         await ctx.send(embed=embed)
-
-        try:
-            await member.send(
-                f"ðŸ”‘ Your WhaleBots license:\n```{key}```"
-            )
-        except discord.Forbidden:
-            pass
 
         return
 
@@ -699,7 +690,6 @@ async def license(
     )
 
     embed.add_field(name="Status",  value=status,           inline=True)
-    embed.add_field(name="Key",     value=f"`{masked}`",    inline=True)
     embed.add_field(name="Expires", value=expires,          inline=True)
     embed.add_field(name="PC",      value=f"`{client_id}`", inline=False)
 
