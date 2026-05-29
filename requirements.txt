@@ -4,6 +4,7 @@ uvicorn
 pydantic
 requests
 aiohttp
+python-multipart
 pyautogui
 pygetwindow
 Pillow
