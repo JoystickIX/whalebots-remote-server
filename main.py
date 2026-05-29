@@ -440,12 +440,7 @@ async def help(ctx):
 
     embed.add_field(
         name="License",
-        value=(
-            "`!license` - Check status\n"
-            "`!license @user <days>` - Issue / extend license\n"
-            "`!rmlicense @user` - Revoke license\n"
-            "`!reducelicense @user <days>` - Reduce license by days"
-        ),
+        value="`!license` - Check status",
         inline=False
     )
 
