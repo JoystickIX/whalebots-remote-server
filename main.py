@@ -23,7 +23,7 @@ import asyncio
 TOKEN      = os.getenv("DISCORD_TOKEN")
 SERVER_URL = os.getenv("SERVER_URL", "https://whalebots-remote-server.onrender.com")
 
-OWNER_ID = 316613385485680650
+OWNER_IDS = {316613385485680650, 641191095258185728}
 
 # =====================================
 # AUTO UPDATE
@@ -551,7 +551,7 @@ async def licence(
 
     if member is not None and days is not None:
 
-        if ctx.author.id != OWNER_ID:
+        if ctx.author.id not in OWNER_IDS:
             await ctx.send("❌ Only owner can issue licences.")
             return
 
