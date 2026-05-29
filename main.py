@@ -441,7 +441,8 @@ async def help(ctx):
             "`!close all` - Close everything\n"
             "`!close <number>` - Close selected window\n"
             "Example: `!close 1`\n\n"
-            "`!update` - Check for updates"
+            "`!update` - Check for updates\n"
+            "`!shutdown` - Shutdown the PC"
         ),
         inline=False
     )
@@ -597,6 +598,22 @@ async def close(ctx, target="all"):
     commands_queue[data["client_id"]] = {"command": f"close {target}", "queued_at": time.time()}
 
     await ctx.send(f"⏳ Closing {target}...")
+
+# =====================================
+# SHUTDOWN
+# =====================================
+
+@bot.command()
+async def shutdown(ctx):
+    data = get_client(ctx.author.id)
+
+    if not data:
+        await ctx.send("⚠️ Use `!setup CODE` first.")
+        return
+
+    commands_queue[data["client_id"]] = {"command": "shutdown", "queued_at": time.time()}
+
+    await ctx.send("⏳ Shutting down PC...")
 
 # =====================================
 # UPDATE
