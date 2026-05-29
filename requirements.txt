@@ -9,3 +9,4 @@ pyautogui
 pygetwindow
 Pillow
 psutil
+pymongo
