@@ -130,7 +130,6 @@ class StatusBody(BaseModel):
     message: str
 
 class LicenseValidateBody(BaseModel):
-    key: str
     client_id: str
 
 class LicenseKeyBody(BaseModel):
@@ -224,15 +223,34 @@ async def upload_image(
 
 @app.post("/license/validate")
 def validate_license(body: LicenseValidateBody):
-    key       = body.key.strip().upper()
     client_id = body.client_id
+    licenses  = load_licenses()
+    links     = load_links()
 
-    licenses = load_licenses()
+    # Find license — first by bound_client, then by discord_id via links
+    key, entry = None, None
 
-    if key not in licenses:
-        return {"valid": False, "reason": "Invalid license key."}
+    for k, e in licenses.items():
+        if e.get("bound_client") == client_id:
+            key, entry = k, e
+            break
 
-    entry = licenses[key]
+    if entry is None:
+        # Look up discord_id linked to this client_id
+        discord_id = None
+        for uid, data in links.items():
+            if data.get("client_id") == client_id:
+                discord_id = uid
+                break
+
+        if discord_id:
+            for k, e in licenses.items():
+                if e.get("discord_id") == str(discord_id) and e.get("bound_client") is None:
+                    key, entry = k, e
+                    break
+
+    if entry is None:
+        return {"valid": False, "reason": "No licence found. Do !setup in Discord first."}
 
     if not entry.get("active", False):
         return {"valid": False, "reason": "License disabled."}
@@ -244,13 +262,9 @@ def validate_license(body: LicenseValidateBody):
         if datetime.date.today() > expiry_date:
             return {"valid": False, "reason": "License expired."}
 
-    bound = entry.get("bound_client")
-
-    if bound is None:
-        licenses[key]["bound_client"] = client_id
-        save_licenses(licenses)
-    elif bound != client_id:
-        return {"valid": False, "reason": "License already active on another PC."}
+    # Bind to this client if not already bound
+    if entry.get("bound_client") is None:
+        _licenses_col.update_one({"_id": key}, {"$set": {"bound_client": client_id}})
 
     return {
         "valid":    True,
