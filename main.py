@@ -31,10 +31,10 @@ OWNER_IDS = {316613385485680650, 641191095258185728}
 # AUTO UPDATE
 # =====================================
 
-LATEST_VERSION = "1.0.1"
+LATEST_VERSION = "1.0.2"
 
 EXE_DOWNLOAD_LINK = (
-    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.1/WhaleBotsRemote.exe"
+    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.2/WhaleBotsRemote.exe"
 )
 
 
