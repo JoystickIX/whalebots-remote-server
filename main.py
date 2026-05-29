@@ -15,6 +15,7 @@ import datetime
 import secrets
 import tempfile
 import asyncio
+import random
 from pymongo import MongoClient
 
 # =====================================
@@ -37,13 +38,12 @@ EXE_DOWNLOAD_LINK = (
     "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.2/WhaleBotsRemote.exe"
 )
 
-
 # =====================================
 # DATABASE
 # =====================================
 
-_mongo_client = MongoClient(MONGO_URI)
-_db           = _mongo_client["whalebots"]
+_mongo_client  = MongoClient(MONGO_URI)
+_db            = _mongo_client["whalebots"]
 _licenses_col  = _db["licenses"]
 _links_col     = _db["links"]
 _paircodes_col = _db["pair_codes"]
@@ -176,7 +176,6 @@ def register(body: RegisterBody):
 
 @app.get("/pair_code/{client_id}")
 def get_pair_code(client_id: str):
-    import random
     doc = _paircodes_col.find_one({"_id": client_id})
     if doc:
         return {"pair_code": doc["pair_code"]}
@@ -242,7 +241,6 @@ def validate_license(body: LicenseValidateBody):
     licenses  = load_licenses()
     links     = load_links()
 
-    # Find license â€” first by bound_client, then by discord_id via links
     key, entry = None, None
 
     for k, e in licenses.items():
@@ -251,7 +249,6 @@ def validate_license(body: LicenseValidateBody):
             break
 
     if entry is None:
-        # Look up discord_id linked to this client_id
         discord_id = None
         for uid, data in links.items():
             if data.get("client_id") == client_id:
@@ -277,7 +274,6 @@ def validate_license(body: LicenseValidateBody):
         if datetime.date.today() > expiry_date:
             return {"valid": False, "reason": "License expired."}
 
-    # Bind to this client if not already bound
     if entry.get("bound_client") is None:
         _licenses_col.update_one({"_id": key}, {"$set": {"bound_client": client_id}})
 
@@ -399,52 +395,52 @@ async def help(ctx):
     )
 
     embed = discord.Embed(
-        title="ðŸ‹ WhaleBots Control Panel",
+        title="WhaleBots Control Panel",
         description="Remote control system for WhaleBots",
         color=0x00b0f4
     )
 
     embed.add_field(
-        name="ðŸ”— Setup",
-        value="`!setup CODE` â†’ Link your Discord account",
+        name="Setup",
+        value="`!setup CODE` - Link your Discord account",
         inline=False
     )
 
     embed.add_field(
-        name="ðŸŽ® Game Controls",
+        name="Game Controls",
         value=(
-            "`!rok` â†’ Launch Rise of Kingdoms\n"
-            "`!cod` â†’ Launch Call of Dragons"
+            "`!rok` - Launch Rise of Kingdoms\n"
+            "`!cod` - Launch Call of Dragons"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="ðŸ–¥ï¸ Monitoring",
+        name="Monitoring",
         value=(
-            "`!screen bot` â†’ Screenshot WhaleBots\n"
-            "`!screen <number>` â†’ Screenshot emulator\n"
+            "`!screen bot` - Screenshot WhaleBots\n"
+            "`!screen <number>` - Screenshot emulator\n"
             "Example: `!screen 1`\n\n"
-            "`!tick <number>` â†’ Toggle selected window\n"
+            "`!tick <number>` - Toggle selected window\n"
             "Example: `!tick 1`"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="âš™ï¸ System",
+        name="System",
         value=(
-            "`!close all` â†’ Close everything\n"
-            "`!close <number>` â†’ Close selected window\n"
+            "`!close all` - Close everything\n"
+            "`!close <number>` - Close selected window\n"
             "Example: `!close 1`\n\n"
-            "`!update` â†’ Check for updates"
+            "`!update` - Check for updates"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="ðŸ”‘ license",
-        value="`!license` â†’ Check status",
+        name="License",
+        value="`!license` - Check status",
         inline=False
     )
 
@@ -465,7 +461,7 @@ async def setup(ctx, pair_code: str):
     client_id = online_clients.get(pair_code)
 
     if not client_id:
-        await ctx.send("âŒ Invalid pair code.")
+        await ctx.send("❌ Invalid pair code.")
         return
 
     links = load_links()
@@ -477,7 +473,7 @@ async def setup(ctx, pair_code: str):
 
     save_links(links)
 
-    await ctx.send(f"âœ… Linked to `{client_id}`")
+    await ctx.send(f"✅ Linked to `{client_id}`")
 
 # =====================================
 # ROK
@@ -488,12 +484,12 @@ async def rok(ctx):
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = "rok"
 
-    await ctx.send("â³ Launching ROK...")
+    await ctx.send("⏳ Launching ROK...")
 
 # =====================================
 # COD
@@ -504,12 +500,12 @@ async def cod(ctx):
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = "cod"
 
-    await ctx.send("â³ Launching COD...")
+    await ctx.send("⏳ Launching COD...")
 
 # =====================================
 # SCREEN
@@ -520,12 +516,12 @@ async def screen(ctx, target="bot"):
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = f"screen {target}"
 
-    await ctx.send(f"ðŸ“¸ Taking screenshot of {target}...")
+    await ctx.send(f"📸 Taking screenshot of {target}...")
 
 # =====================================
 # TICK
@@ -536,12 +532,12 @@ async def tick(ctx, number: int):
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = f"tick {number}"
 
-    await ctx.send(f"â³ Ticking bot {number}...")
+    await ctx.send(f"⏳ Ticking bot {number}...")
 
 # =====================================
 # CLOSE
@@ -552,12 +548,12 @@ async def close(ctx, target="all"):
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = f"close {target}"
 
-    await ctx.send(f"â³ Closing {target}...")
+    await ctx.send(f"⏳ Closing {target}...")
 
 # =====================================
 # UPDATE
@@ -568,15 +564,15 @@ async def update(ctx):
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = "update"
 
-    await ctx.send("ðŸ” Checking for updates...")
+    await ctx.send("🔍 Checking for updates...")
 
 # =====================================
-# license
+# LICENSE
 # =====================================
 
 @bot.command()
@@ -590,18 +586,17 @@ async def license(
     if member is not None and days is not None:
 
         if ctx.author.id not in OWNER_IDS:
-            await ctx.send("âŒ Only owner can issue licenses.")
+            await ctx.send("❌ Only owner can issue licenses.")
             return
 
-        licenses  = load_licenses()
+        licenses   = load_licenses()
         key, entry = get_license_by_discord(member.id)
 
         if entry is not None:
-            # Member already has a license â€” extend it
             current_expires = entry.get("expires")
 
             if days <= 0:
-                new_expires = None  # upgrade to lifetime
+                new_expires = None
             elif current_expires:
                 base = max(
                     datetime.date.fromisoformat(current_expires),
@@ -609,7 +604,7 @@ async def license(
                 )
                 new_expires = (base + datetime.timedelta(days=days)).isoformat()
             else:
-                new_expires = None  # already lifetime, keep it
+                new_expires = None
 
             licenses[key]["expires"] = new_expires
             licenses[key]["active"]  = True
@@ -618,16 +613,16 @@ async def license(
             display_expires = new_expires or "Lifetime"
 
             embed = discord.Embed(
-                title=”🔄 License Extended”,
+                title="License Extended",
                 color=0x00b04f
             )
-            embed.add_field(name=”User”,       value=member.mention,  inline=True)
-            embed.add_field(name=”New Expiry”, value=display_expires, inline=True)
+            embed.add_field(name="User",       value=member.mention,  inline=True)
+            embed.add_field(name="New Expiry", value=display_expires, inline=True)
 
             await ctx.send(embed=embed)
             return
 
-        # No existing license â€” create a new one
+        # No existing license — create a new one
         raw = secrets.token_hex(8).upper()
         key = f"{raw[0:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:16]}"
 
@@ -652,12 +647,12 @@ async def license(
         display_expires = expires or "Lifetime"
 
         embed = discord.Embed(
-            title=”✅ License Issued”,
+            title="✅ License Issued",
             color=0x00b04f
         )
 
-        embed.add_field(name=”User”,    value=member.mention,  inline=True)
-        embed.add_field(name=”Expires”, value=display_expires, inline=True)
+        embed.add_field(name="User",    value=member.mention,  inline=True)
+        embed.add_field(name="Expires", value=display_expires, inline=True)
 
         await ctx.send(embed=embed)
 
@@ -668,7 +663,7 @@ async def license(
     data = get_client(ctx.author.id)
 
     if not data:
-        await ctx.send("âš ï¸ Use `!setup CODE` first.")
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     client_id = data["client_id"]
@@ -676,16 +671,15 @@ async def license(
     key, entry = get_license_info(client_id)
 
     if not key:
-        await ctx.send("âŒ No license found.")
+        await ctx.send("❌ No license found.")
         return
 
     active  = entry.get("active", False)
     expires = entry.get("expires") or "Lifetime"
-    masked  = f"****-****-****-{key[-4:]}"
-    status  = "âœ… Active" if active else "âŒ Disabled"
+    status  = "✅ Active" if active else "❌ Disabled"
 
     embed = discord.Embed(
-        title="ðŸ”‘ license Status",
+        title="🔑 License Status",
         color=0x00b04f if active else 0xff0000
     )
 
@@ -702,7 +696,7 @@ async def license(
 @bot.command()
 async def clients(ctx):
     if ctx.author.id not in OWNER_IDS:
-        await ctx.send("âŒ Only owners can view the client list.")
+        await ctx.send("❌ Only owners can view the client list.")
         return
 
     licenses = load_licenses()
@@ -718,10 +712,9 @@ async def clients(ctx):
         if not entry.get("active", False):
             continue
 
-        customer  = entry.get("customer", "Unknown")
-        expires   = entry.get("expires")
-        bound     = entry.get("bound_client") or "Not bound"
-        masked    = f"****-{key[-4:]}"
+        customer = entry.get("customer", "Unknown")
+        expires  = entry.get("expires")
+        bound    = entry.get("bound_client") or "Not bound"
 
         if expires:
             expiry_date = datetime.date.fromisoformat(expires)
@@ -733,19 +726,18 @@ async def clients(ctx):
         else:
             expiry_str = "Lifetime"
 
-        lines.append(f"**{customer}** `{masked}`\nâ”” PC: `{bound}` | Expires: {expiry_str}")
+        lines.append(f"**{customer}**\n└ PC: `{bound}` | Expires: {expiry_str}")
 
     if not lines:
         await ctx.send("No active licenses.")
         return
 
-    # Split into pages of 10 to avoid hitting Discord's 4096 char embed limit
     page_size = 10
     pages     = [lines[i:i + page_size] for i in range(0, len(lines), page_size)]
 
     for i, page in enumerate(pages, 1):
         embed = discord.Embed(
-            title=f"ðŸ“‹ Subscribed Clients ({len(lines)} total)" if i == 1 else f"ðŸ“‹ Clients (page {i})",
+            title=f"Subscribed Clients ({len(lines)} total)" if i == 1 else f"Clients (page {i})",
             description="\n\n".join(page),
             color=0x00b0f4
         )
