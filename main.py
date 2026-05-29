@@ -53,7 +53,14 @@ _paircodes_col = _db["pair_codes"]
 # LOAD / SAVE
 # =====================================
 
+_links_cache      = {}
+_links_cache_time = 0
+LINKS_CACHE_TTL   = 10  # seconds
+
 def load_links():
+    global _links_cache, _links_cache_time
+    if time.time() - _links_cache_time < LINKS_CACHE_TTL:
+        return _links_cache
     result = {}
     for doc in _links_col.find():
         user_id = doc["_id"]
@@ -61,9 +68,12 @@ def load_links():
             "client_id":  doc["client_id"],
             "channel_id": doc["channel_id"]
         }
+    _links_cache      = result
+    _links_cache_time = time.time()
     return result
 
 def save_links(data):
+    global _links_cache_time
     for user_id, entry in data.items():
         _links_col.update_one(
             {"_id": user_id},
@@ -73,6 +83,7 @@ def save_links(data):
             }},
             upsert=True
         )
+    _links_cache_time = 0  # invalidate cache
 
 def load_licenses():
     result = {}
@@ -444,7 +455,7 @@ async def help(ctx):
             "`!close <number>` - Close selected window\n"
             "Example: `!close 1`\n\n"
             "`!update` - Check for updates\n"
-            "`!shutdown` - Shutdown the PC"
+            "`!shutdown confirm` - Shutdown the PC"
         ),
         inline=False
     )
@@ -622,16 +633,20 @@ async def close(ctx, target="all"):
 # =====================================
 
 @bot.command()
-async def shutdown(ctx):
+async def shutdown(ctx, confirm: str = None):
     data = get_client(ctx.author.id)
 
     if not data:
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
+    if confirm != "confirm":
+        await ctx.send("⚠️ **Are you sure?** Type `!shutdown confirm` to proceed.")
+        return
+
     commands_queue[data["client_id"]] = {"command": "shutdown", "queued_at": time.time()}
 
-    await ctx.send("⏳ Shutting down PC...")
+    await ctx.send("🔴 Shutting down PC...")
 
 # =====================================
 # UPDATE
