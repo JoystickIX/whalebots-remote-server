@@ -16,6 +16,7 @@ import secrets
 import tempfile
 import asyncio
 import random
+import time
 from pymongo import MongoClient
 
 # =====================================
@@ -32,10 +33,10 @@ OWNER_IDS = {316613385485680650, 641191095258185728}
 # AUTO UPDATE
 # =====================================
 
-LATEST_VERSION = "1.0.2"
+LATEST_VERSION = "1.0.3"
 
 EXE_DOWNLOAD_LINK = (
-    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.2/WhaleBotsRemote.exe"
+    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.3/WhaleBotsRemote.exe"
 )
 
 # =====================================
@@ -187,16 +188,22 @@ def get_pair_code(client_id: str):
 # COMMAND
 # =====================================
 
+COMMAND_TTL = 60  # discard commands older than 60 seconds
+
 @app.get("/command/{client_id}")
 def get_command(client_id: str):
-    command = commands_queue.get(client_id)
+    entry = commands_queue.get(client_id)
 
-    if not command:
+    if not entry:
         return {"command": None}
 
     commands_queue[client_id] = None
 
-    return {"command": command}
+    if time.time() - entry["queued_at"] > COMMAND_TTL:
+        print(f"STALE COMMAND DISCARDED [{client_id}]: {entry['command']}")
+        return {"command": None}
+
+    return {"command": entry["command"]}
 
 # =====================================
 # STATUS
@@ -350,10 +357,11 @@ async def check_images():
 
                     try:
                         await channel.send(file=discord.File(tmp_path))
+                        image_queue[client_id] = None
+                    except Exception as send_err:
+                        print(f"check_images send error [{user_id}]: {send_err}")
                     finally:
                         os.remove(tmp_path)
-
-                image_queue[client_id] = None
 
         except Exception as e:
             print(f"check_images error [{user_id}]: {e}")
@@ -522,7 +530,7 @@ async def rok(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = "rok"
+    commands_queue[data["client_id"]] = {"command": "rok", "queued_at": time.time()}
 
     await ctx.send("⏳ Launching ROK...")
 
@@ -538,7 +546,7 @@ async def cod(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = "cod"
+    commands_queue[data["client_id"]] = {"command": "cod", "queued_at": time.time()}
 
     await ctx.send("⏳ Launching COD...")
 
@@ -554,7 +562,7 @@ async def screen(ctx, target="bot"):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = f"screen {target}"
+    commands_queue[data["client_id"]] = {"command": f"screen {target}", "queued_at": time.time()}
 
     await ctx.send(f"📸 Taking screenshot of {target}...")
 
@@ -570,7 +578,7 @@ async def tick(ctx, number: int):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = f"tick {number}"
+    commands_queue[data["client_id"]] = {"command": f"tick {number}", "queued_at": time.time()}
 
     await ctx.send(f"⏳ Ticking bot {number}...")
 
@@ -586,7 +594,7 @@ async def close(ctx, target="all"):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = f"close {target}"
+    commands_queue[data["client_id"]] = {"command": f"close {target}", "queued_at": time.time()}
 
     await ctx.send(f"⏳ Closing {target}...")
 
@@ -602,7 +610,7 @@ async def update(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = "update"
+    commands_queue[data["client_id"]] = {"command": "update", "queued_at": time.time()}
 
     await ctx.send("🔍 Checking for updates...")
 
