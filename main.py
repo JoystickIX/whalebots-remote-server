@@ -4,22 +4,24 @@
 
 import discord
 from discord.ext import commands, tasks
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException
+from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 import threading
 import uvicorn
 import os
 import json
-import requests
+import aiohttp
 import datetime
 import secrets
+import tempfile
+import asyncio
 
 # =====================================
 # ENV
 # =====================================
 
 TOKEN      = os.getenv("DISCORD_TOKEN")
-API_SECRET = os.getenv("ADMIN_API_SECRET", "changeme-please-set-this")
+SERVER_URL = os.getenv("SERVER_URL", "https://whalebots-remote-server.onrender.com")
 
 OWNER_ID = 316613385485680650
 
@@ -41,19 +43,22 @@ LINKS_FILE    = "links.json"
 LICENSES_FILE = "licenses.json"
 
 # =====================================
+# FILE LOCK
+# =====================================
+
+_links_lock    = threading.Lock()
+_licenses_lock = threading.Lock()
+
+# =====================================
 # CREATE FILES
 # =====================================
 
 if not os.path.exists(LINKS_FILE):
-
     with open(LINKS_FILE, "w") as f:
-
         json.dump({}, f, indent=4)
 
 if not os.path.exists(LICENSES_FILE):
-
     with open(LICENSES_FILE, "w") as f:
-
         json.dump({}, f, indent=4)
 
 # =====================================
@@ -61,28 +66,24 @@ if not os.path.exists(LICENSES_FILE):
 # =====================================
 
 def load_links():
-
-    with open(LINKS_FILE, "r") as f:
-
-        return json.load(f)
+    with _links_lock:
+        with open(LINKS_FILE, "r") as f:
+            return json.load(f)
 
 def save_links(data):
-
-    with open(LINKS_FILE, "w") as f:
-
-        json.dump(data, f, indent=4)
+    with _links_lock:
+        with open(LINKS_FILE, "w") as f:
+            json.dump(data, f, indent=4)
 
 def load_licenses():
-
-    with open(LICENSES_FILE, "r") as f:
-
-        return json.load(f)
+    with _licenses_lock:
+        with open(LICENSES_FILE, "r") as f:
+            return json.load(f)
 
 def save_licenses(data):
-
-    with open(LICENSES_FILE, "w") as f:
-
-        json.dump(data, f, indent=4)
+    with _licenses_lock:
+        with open(LICENSES_FILE, "w") as f:
+            json.dump(data, f, indent=4)
 
 # =====================================
 # STORAGE
@@ -120,21 +121,17 @@ app = FastAPI()
 # =====================================
 
 class RegisterBody(BaseModel):
-
     client_id: str
     pair_code: str
 
 class StatusBody(BaseModel):
-
     message: str
 
 class LicenseValidateBody(BaseModel):
-
     key: str
     client_id: str
 
 class LicenseKeyBody(BaseModel):
-
     key: str
 
 # =====================================
@@ -143,10 +140,7 @@ class LicenseKeyBody(BaseModel):
 
 @app.get("/")
 def home():
-
-    return {
-        "status": "WhaleBots Server Online"
-    }
+    return {"status": "WhaleBots Server Online"}
 
 # =====================================
 # VERSION API
@@ -154,11 +148,8 @@ def home():
 
 @app.get("/version")
 def version():
-
     return {
-
-        "version": LATEST_VERSION,
-
+        "version":  LATEST_VERSION,
         "download": EXE_DOWNLOAD_LINK
     }
 
@@ -168,22 +159,14 @@ def version():
 
 @app.post("/register")
 def register(body: RegisterBody):
-
     if not body.client_id or not body.pair_code:
-
-        return {
-            "success": False
-        }
+        return {"success": False}
 
     online_clients[body.pair_code] = body.client_id
 
-    print(
-        f"REGISTERED: {body.client_id} ({body.pair_code})"
-    )
+    print(f"REGISTERED: {body.client_id} ({body.pair_code})")
 
-    return {
-        "success": True
-    }
+    return {"success": True}
 
 # =====================================
 # COMMAND
@@ -191,53 +174,34 @@ def register(body: RegisterBody):
 
 @app.get("/command/{client_id}")
 def get_command(client_id: str):
-
     command = commands_queue.get(client_id)
 
     if not command:
-
-        return {
-            "command": None
-        }
+        return {"command": None}
 
     commands_queue[client_id] = None
 
-    return {
-        "command": command
-    }
+    return {"command": command}
 
 # =====================================
 # STATUS
 # =====================================
 
 @app.post("/status/{client_id}")
-def receive_status(
-    client_id: str,
-    body: StatusBody
-):
-
+def receive_status(client_id: str, body: StatusBody):
     status_queue[client_id] = body.message
-
-    return {
-        "success": True
-    }
+    return {"success": True}
 
 @app.get("/status/{client_id}")
 def get_status(client_id: str):
-
     message = status_queue.get(client_id)
 
     if not message:
-
-        return {
-            "message": None
-        }
+        return {"message": None}
 
     status_queue[client_id] = None
 
-    return {
-        "message": message
-    }
+    return {"message": message}
 
 # =====================================
 # IMAGE UPLOAD
@@ -248,96 +212,48 @@ async def upload_image(
     client_id: str,
     file: UploadFile = File(...)
 ):
-
     content = await file.read()
-
     image_queue[client_id] = content
-
-    return {
-        "success": True
-    }
+    return {"success": True}
 
 # =====================================
 # LICENSE VALIDATION
 # =====================================
 
 @app.post("/license/validate")
-def validate_license(
-    body: LicenseValidateBody
-):
-
+def validate_license(body: LicenseValidateBody):
     key       = body.key.strip().upper()
     client_id = body.client_id
 
     licenses = load_licenses()
 
     if key not in licenses:
-
-        return {
-
-            "valid": False,
-
-            "reason":
-            "Invalid license key."
-        }
+        return {"valid": False, "reason": "Invalid license key."}
 
     entry = licenses[key]
 
     if not entry.get("active", False):
-
-        return {
-
-            "valid": False,
-
-            "reason":
-            "License disabled."
-        }
+        return {"valid": False, "reason": "License disabled."}
 
     expires = entry.get("expires")
 
     if expires:
-
-        expiry_date = datetime.date.fromisoformat(
-            expires
-        )
-
+        expiry_date = datetime.date.fromisoformat(expires)
         if datetime.date.today() > expiry_date:
-
-            return {
-
-                "valid": False,
-
-                "reason":
-                "License expired."
-            }
+            return {"valid": False, "reason": "License expired."}
 
     bound = entry.get("bound_client")
 
     if bound is None:
-
         licenses[key]["bound_client"] = client_id
-
         save_licenses(licenses)
-
     elif bound != client_id:
-
-        return {
-
-            "valid": False,
-
-            "reason":
-            "License already active on another PC."
-        }
+        return {"valid": False, "reason": "License already active on another PC."}
 
     return {
-
-        "valid": True,
-
-        "expires":
-        expires or "lifetime",
-
-        "customer":
-        entry.get("customer", "")
+        "valid":    True,
+        "expires":  expires or "lifetime",
+        "customer": entry.get("customer", "")
     }
 
 # =====================================
@@ -346,9 +262,7 @@ def validate_license(
 
 @bot.event
 async def on_ready():
-
     print(f"Logged in as {bot.user}")
-
     check_status.start()
     check_images.start()
 
@@ -358,37 +272,28 @@ async def on_ready():
 
 @tasks.loop(seconds=2)
 async def check_status():
-
     links = load_links()
 
-    for user_id, data in links.items():
+    async with aiohttp.ClientSession() as session:
+        for user_id, data in links.items():
+            try:
+                client_id  = data["client_id"]
+                channel_id = data["channel_id"]
 
-        try:
+                async with session.get(
+                    f"{SERVER_URL}/status/{client_id}",
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    result  = await response.json()
+                    message = result.get("message")
 
-            client_id  = data["client_id"]
-            channel_id = data["channel_id"]
+                if message:
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        await channel.send(message)
 
-            response = requests.get(
-                f"https://whalebots-remote-server.onrender.com/status/{client_id}"
-            )
-
-            result = response.json()
-
-            message = result.get("message")
-
-            if message:
-
-                channel = bot.get_channel(
-                    channel_id
-                )
-
-                if channel:
-
-                    await channel.send(message)
-
-        except Exception as e:
-
-            print(e)
+            except Exception as e:
+                print(f"check_status error [{user_id}]: {e}")
 
 # =====================================
 # IMAGE LOOP
@@ -396,60 +301,49 @@ async def check_status():
 
 @tasks.loop(seconds=2)
 async def check_images():
-
     links = load_links()
 
     for user_id, data in links.items():
-
         try:
-
             client_id  = data["client_id"]
             channel_id = data["channel_id"]
 
             image = image_queue.get(client_id)
 
             if image:
-
-                channel = bot.get_channel(
-                    channel_id
-                )
+                channel = bot.get_channel(channel_id)
 
                 if channel:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=f"_{client_id}.png",
+                        delete=False
+                    ) as tmp:
+                        tmp.write(image)
+                        tmp_path = tmp.name
 
-                    with open("temp.png", "wb") as f:
-
-                        f.write(image)
-
-                    await channel.send(
-                        file=discord.File("temp.png")
-                    )
+                    try:
+                        await channel.send(file=discord.File(tmp_path))
+                    finally:
+                        os.remove(tmp_path)
 
                 image_queue[client_id] = None
 
         except Exception as e:
-
-            print(e)
+            print(f"check_images error [{user_id}]: {e}")
 
 # =====================================
 # HELPERS
 # =====================================
 
 def get_client(user_id):
-
     links = load_links()
-
     return links.get(str(user_id))
 
 def get_license_info(client_id):
-
     licenses = load_licenses()
-
     for key, entry in licenses.items():
-
         if entry.get("bound_client") == client_id:
-
             return key, entry
-
     return None, None
 
 # =====================================
@@ -458,7 +352,6 @@ def get_license_info(client_id):
 
 @bot.command()
 async def help(ctx):
-
     data = get_client(ctx.author.id)
 
     connected_pc = (
@@ -475,9 +368,7 @@ async def help(ctx):
 
     embed.add_field(
         name="🔗 Setup",
-        value=(
-            "`!setup CODE` → Link your Discord account"
-        ),
+        value="`!setup CODE` → Link your Discord account",
         inline=False
     )
 
@@ -496,7 +387,6 @@ async def help(ctx):
             "`!screen bot` → Screenshot WhaleBots\n"
             "`!screen <number>` → Screenshot emulator\n"
             "Example: `!screen 1`\n\n"
-
             "`!tick <number>` → Toggle selected window\n"
             "Example: `!tick 1`"
         ),
@@ -509,17 +399,14 @@ async def help(ctx):
             "`!close all` → Close everything\n"
             "`!close <number>` → Close selected window\n"
             "Example: `!close 1`\n\n"
-
-            "`!update` → Update client"
+            "`!update` → Check for updates"
         ),
         inline=False
     )
 
     embed.add_field(
         name="🔑 Licence",
-        value=(
-            "`!licence` → Check status"
-        ),
+        value="`!licence` → Check status",
         inline=False
     )
 
@@ -537,31 +424,22 @@ async def help(ctx):
 
 @bot.command()
 async def setup(ctx, pair_code: str):
-
     client_id = online_clients.get(pair_code)
 
     if not client_id:
-
-        await ctx.send(
-            "❌ Invalid pair code."
-        )
-
+        await ctx.send("❌ Invalid pair code.")
         return
 
     links = load_links()
 
     links[str(ctx.author.id)] = {
-
-        "client_id": client_id,
-
+        "client_id":  client_id,
         "channel_id": ctx.channel.id
     }
 
     save_links(links)
 
-    await ctx.send(
-        f"✅ Linked to `{client_id}`"
-    )
+    await ctx.send(f"✅ Linked to `{client_id}`")
 
 # =====================================
 # ROK
@@ -569,22 +447,15 @@ async def setup(ctx, pair_code: str):
 
 @bot.command()
 async def rok(ctx):
-
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = "rok"
 
-    await ctx.send(
-        "⏳ Launching ROK..."
-    )
+    await ctx.send("⏳ Launching ROK...")
 
 # =====================================
 # COD
@@ -592,22 +463,15 @@ async def rok(ctx):
 
 @bot.command()
 async def cod(ctx):
-
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = "cod"
 
-    await ctx.send(
-        "⏳ Launching COD..."
-    )
+    await ctx.send("⏳ Launching COD...")
 
 # =====================================
 # SCREEN
@@ -615,22 +479,15 @@ async def cod(ctx):
 
 @bot.command()
 async def screen(ctx, target="bot"):
-
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = f"screen {target}"
 
-    await ctx.send(
-        f"📸 Taking screenshot of {target}..."
-    )
+    await ctx.send(f"📸 Taking screenshot of {target}...")
 
 # =====================================
 # TICK
@@ -638,22 +495,15 @@ async def screen(ctx, target="bot"):
 
 @bot.command()
 async def tick(ctx, number: int):
-
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = f"tick {number}"
 
-    await ctx.send(
-        f"⏳ Ticking bot {number}..."
-    )
+    await ctx.send(f"⏳ Ticking bot {number}...")
 
 # =====================================
 # CLOSE
@@ -661,22 +511,15 @@ async def tick(ctx, number: int):
 
 @bot.command()
 async def close(ctx, target="all"):
-
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = f"close {target}"
 
-    await ctx.send(
-        f"⏳ Closing {target}..."
-    )
+    await ctx.send(f"⏳ Closing {target}...")
 
 # =====================================
 # UPDATE
@@ -684,22 +527,15 @@ async def close(ctx, target="all"):
 
 @bot.command()
 async def update(ctx):
-
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     commands_queue[data["client_id"]] = "update"
 
-    await ctx.send(
-        "⬇️ Sending update command..."
-    )
+    await ctx.send("🔍 Checking for updates...")
 
 # =====================================
 # LICENCE
@@ -711,17 +547,12 @@ async def licence(
     member: discord.Member = None,
     days: int = None
 ):
-
     # OWNER CREATE LICENSE
 
     if member is not None and days is not None:
 
         if ctx.author.id != OWNER_ID:
-
-            await ctx.send(
-                "❌ Only owner can issue licences."
-            )
-
+            await ctx.send("❌ Only owner can issue licences.")
             return
 
         raw = secrets.token_hex(8).upper()
@@ -734,67 +565,43 @@ async def licence(
         )
 
         if days > 0:
-
             expires = (
                 datetime.date.today() +
                 datetime.timedelta(days=days)
             ).isoformat()
-
         else:
-
-            expires = "Lifetime"
+            expires = None
 
         licenses = load_licenses()
 
         licenses[key] = {
-
-            "active": True,
-
-            "expires":
-            None if expires == "Lifetime" else expires,
-
+            "active":       True,
+            "expires":      expires,
             "bound_client": None,
-
-            "customer": str(member),
-
-            "discord_id": str(member.id)
+            "customer":     str(member),
+            "discord_id":   str(member.id)
         }
 
         save_licenses(licenses)
+
+        display_expires = expires or "Lifetime"
 
         embed = discord.Embed(
             title="✅ Licence Issued",
             color=0x00b04f
         )
 
-        embed.add_field(
-            name="User",
-            value=member.mention,
-            inline=True
-        )
-
-        embed.add_field(
-            name="Key",
-            value=f"```{key}```",
-            inline=False
-        )
-
-        embed.add_field(
-            name="Expires",
-            value=expires,
-            inline=True
-        )
+        embed.add_field(name="User",    value=member.mention,       inline=True)
+        embed.add_field(name="Key",     value=f"```{key}```",       inline=False)
+        embed.add_field(name="Expires", value=display_expires,      inline=True)
 
         await ctx.send(embed=embed)
 
         try:
-
             await member.send(
                 f"🔑 Your WhaleBots licence:\n```{key}```"
             )
-
-        except:
-
+        except discord.Forbidden:
             pass
 
         return
@@ -804,11 +611,7 @@ async def licence(
     data = get_client(ctx.author.id)
 
     if not data:
-
-        await ctx.send(
-            "⚠️ Use `!setup CODE` first."
-        )
-
+        await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
     client_id = data["client_id"]
@@ -816,53 +619,23 @@ async def licence(
     key, entry = get_license_info(client_id)
 
     if not key:
-
-        await ctx.send(
-            "❌ No licence found."
-        )
-
+        await ctx.send("❌ No licence found.")
         return
 
     active  = entry.get("active", False)
-
     expires = entry.get("expires") or "Lifetime"
-
-    masked = f"****-****-****-{key[-4:]}"
-
-    status = (
-        "✅ Active"
-        if active else
-        "❌ Disabled"
-    )
+    masked  = f"****-****-****-{key[-4:]}"
+    status  = "✅ Active" if active else "❌ Disabled"
 
     embed = discord.Embed(
         title="🔑 Licence Status",
         color=0x00b04f if active else 0xff0000
     )
 
-    embed.add_field(
-        name="Status",
-        value=status,
-        inline=True
-    )
-
-    embed.add_field(
-        name="Key",
-        value=f"`{masked}`",
-        inline=True
-    )
-
-    embed.add_field(
-        name="Expires",
-        value=expires,
-        inline=True
-    )
-
-    embed.add_field(
-        name="PC",
-        value=f"`{client_id}`",
-        inline=False
-    )
+    embed.add_field(name="Status",  value=status,           inline=True)
+    embed.add_field(name="Key",     value=f"`{masked}`",    inline=True)
+    embed.add_field(name="Expires", value=expires,          inline=True)
+    embed.add_field(name="PC",      value=f"`{client_id}`", inline=False)
 
     await ctx.send(embed=embed)
 
@@ -871,17 +644,11 @@ async def licence(
 # =====================================
 
 def start_bot():
-
     try:
-
         print("STARTING DISCORD BOT...")
-
         bot.run(TOKEN)
-
     except Exception as e:
-
-        print("DISCORD BOT ERROR:")
-        print(e)
+        print(f"DISCORD BOT ERROR: {e}")
 
 # =====================================
 # START EVERYTHING
