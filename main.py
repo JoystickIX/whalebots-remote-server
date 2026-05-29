@@ -15,6 +15,7 @@ import datetime
 import secrets
 import tempfile
 import asyncio
+from pymongo import MongoClient
 
 # =====================================
 # ENV
@@ -22,6 +23,7 @@ import asyncio
 
 TOKEN      = os.getenv("DISCORD_TOKEN")
 SERVER_URL = os.getenv("SERVER_URL", "https://whalebots-remote-server.onrender.com")
+MONGO_URI  = os.getenv("MONGO_URI")
 
 OWNER_IDS = {316613385485680650, 641191095258185728}
 
@@ -35,55 +37,55 @@ EXE_DOWNLOAD_LINK = (
     "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.1/WhaleBotsRemote.exe"
 )
 
-# =====================================
-# FILES
-# =====================================
-
-LINKS_FILE    = "links.json"
-LICENSES_FILE = "licenses.json"
 
 # =====================================
-# FILE LOCK
+# DATABASE
 # =====================================
 
-_links_lock    = threading.Lock()
-_licenses_lock = threading.Lock()
-
-# =====================================
-# CREATE FILES
-# =====================================
-
-if not os.path.exists(LINKS_FILE):
-    with open(LINKS_FILE, "w") as f:
-        json.dump({}, f, indent=4)
-
-if not os.path.exists(LICENSES_FILE):
-    with open(LICENSES_FILE, "w") as f:
-        json.dump({}, f, indent=4)
+_mongo_client = MongoClient(MONGO_URI)
+_db           = _mongo_client["whalebots"]
+_licenses_col = _db["licenses"]
+_links_col    = _db["links"]
 
 # =====================================
 # LOAD / SAVE
 # =====================================
 
 def load_links():
-    with _links_lock:
-        with open(LINKS_FILE, "r") as f:
-            return json.load(f)
+    result = {}
+    for doc in _links_col.find():
+        user_id = doc["_id"]
+        result[user_id] = {
+            "client_id":  doc["client_id"],
+            "channel_id": doc["channel_id"]
+        }
+    return result
 
 def save_links(data):
-    with _links_lock:
-        with open(LINKS_FILE, "w") as f:
-            json.dump(data, f, indent=4)
+    for user_id, entry in data.items():
+        _links_col.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "client_id":  entry["client_id"],
+                "channel_id": entry["channel_id"]
+            }},
+            upsert=True
+        )
 
 def load_licenses():
-    with _licenses_lock:
-        with open(LICENSES_FILE, "r") as f:
-            return json.load(f)
+    result = {}
+    for doc in _licenses_col.find():
+        key = doc["_id"]
+        result[key] = {k: v for k, v in doc.items() if k != "_id"}
+    return result
 
 def save_licenses(data):
-    with _licenses_lock:
-        with open(LICENSES_FILE, "w") as f:
-            json.dump(data, f, indent=4)
+    for key, entry in data.items():
+        _licenses_col.update_one(
+            {"_id": key},
+            {"$set": entry},
+            upsert=True
+        )
 
 # =====================================
 # STORAGE
@@ -346,6 +348,13 @@ def get_license_info(client_id):
             return key, entry
     return None, None
 
+def get_license_by_discord(discord_id):
+    licenses = load_licenses()
+    for key, entry in licenses.items():
+        if entry.get("discord_id") == str(discord_id):
+            return key, entry
+    return None, None
+
 # =====================================
 # HELP
 # =====================================
@@ -547,7 +556,7 @@ async def licence(
     member: discord.Member = None,
     days: int = None
 ):
-    # OWNER CREATE LICENSE
+    # OWNER CREATE / EXTEND LICENSE
 
     if member is not None and days is not None:
 
@@ -555,14 +564,44 @@ async def licence(
             await ctx.send("❌ Only owner can issue licences.")
             return
 
-        raw = secrets.token_hex(8).upper()
+        licenses  = load_licenses()
+        key, entry = get_license_by_discord(member.id)
 
-        key = (
-            f"{raw[0:4]}-"
-            f"{raw[4:8]}-"
-            f"{raw[8:12]}-"
-            f"{raw[12:16]}"
-        )
+        if entry is not None:
+            # Member already has a licence — extend it
+            current_expires = entry.get("expires")
+
+            if days <= 0:
+                new_expires = None  # upgrade to lifetime
+            elif current_expires:
+                base = max(
+                    datetime.date.fromisoformat(current_expires),
+                    datetime.date.today()
+                )
+                new_expires = (base + datetime.timedelta(days=days)).isoformat()
+            else:
+                new_expires = None  # already lifetime, keep it
+
+            licenses[key]["expires"] = new_expires
+            licenses[key]["active"]  = True
+            save_licenses(licenses)
+
+            display_expires = new_expires or "Lifetime"
+
+            embed = discord.Embed(
+                title="🔄 Licence Extended",
+                color=0x00b04f
+            )
+            embed.add_field(name="User",        value=member.mention,           inline=True)
+            embed.add_field(name="Key",         value=f"`****-****-****-{key[-4:]}`", inline=False)
+            embed.add_field(name="New Expiry",  value=display_expires,          inline=True)
+
+            await ctx.send(embed=embed)
+            return
+
+        # No existing licence — create a new one
+        raw = secrets.token_hex(8).upper()
+        key = f"{raw[0:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:16]}"
 
         if days > 0:
             expires = (
@@ -571,8 +610,6 @@ async def licence(
             ).isoformat()
         else:
             expires = None
-
-        licenses = load_licenses()
 
         licenses[key] = {
             "active":       True,
@@ -591,9 +628,9 @@ async def licence(
             color=0x00b04f
         )
 
-        embed.add_field(name="User",    value=member.mention,       inline=True)
-        embed.add_field(name="Key",     value=f"```{key}```",       inline=False)
-        embed.add_field(name="Expires", value=display_expires,      inline=True)
+        embed.add_field(name="User",    value=member.mention,  inline=True)
+        embed.add_field(name="Key",     value=f"```{key}```",  inline=False)
+        embed.add_field(name="Expires", value=display_expires, inline=True)
 
         await ctx.send(embed=embed)
 
@@ -638,6 +675,62 @@ async def licence(
     embed.add_field(name="PC",      value=f"`{client_id}`", inline=False)
 
     await ctx.send(embed=embed)
+
+# =====================================
+# CLIENTS
+# =====================================
+
+@bot.command()
+async def clients(ctx):
+    if ctx.author.id not in OWNER_IDS:
+        await ctx.send("❌ Only owners can view the client list.")
+        return
+
+    licenses = load_licenses()
+
+    if not licenses:
+        await ctx.send("No licences found.")
+        return
+
+    today = datetime.date.today()
+    lines = []
+
+    for key, entry in licenses.items():
+        if not entry.get("active", False):
+            continue
+
+        customer  = entry.get("customer", "Unknown")
+        expires   = entry.get("expires")
+        bound     = entry.get("bound_client") or "Not bound"
+        masked    = f"****-{key[-4:]}"
+
+        if expires:
+            expiry_date = datetime.date.fromisoformat(expires)
+            days_left   = (expiry_date - today).days
+            if days_left < 0:
+                expiry_str = f"~~{expires}~~ (expired)"
+            else:
+                expiry_str = f"{expires} ({days_left}d left)"
+        else:
+            expiry_str = "Lifetime"
+
+        lines.append(f"**{customer}** `{masked}`\n└ PC: `{bound}` | Expires: {expiry_str}")
+
+    if not lines:
+        await ctx.send("No active licences.")
+        return
+
+    # Split into pages of 10 to avoid hitting Discord's 4096 char embed limit
+    page_size = 10
+    pages     = [lines[i:i + page_size] for i in range(0, len(lines), page_size)]
+
+    for i, page in enumerate(pages, 1):
+        embed = discord.Embed(
+            title=f"📋 Subscribed Clients ({len(lines)} total)" if i == 1 else f"📋 Clients (page {i})",
+            description="\n\n".join(page),
+            color=0x00b0f4
+        )
+        await ctx.send(embed=embed)
 
 # =====================================
 # START BOT
