@@ -8,3 +8,4 @@ python-multipart
 pyautogui
 pygetwindow
 Pillow
+psutil
