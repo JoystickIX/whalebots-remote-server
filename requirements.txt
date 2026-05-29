@@ -1,5 +1,9 @@
 discord.py
 fastapi
 uvicorn
+pydantic
 requests
-python-multipart
+aiohttp
+pyautogui
+pygetwindow
+Pillow
