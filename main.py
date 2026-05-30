@@ -28,7 +28,7 @@ TOKEN      = os.getenv("DISCORD_TOKEN")
 SERVER_URL = os.getenv("SERVER_URL", "https://whalebots-remote-server-production.up.railway.app")
 MONGO_URI  = os.getenv("MONGO_URI")
 
-OWNER_IDS = {316613385485680650, 641191095258185728}
+OWNER_IDS = {316613385485680650, 641191095258185728, 850489464257642527}
 
 # =====================================
 # AUTO UPDATE
