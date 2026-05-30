@@ -987,11 +987,13 @@ async def clients(ctx):
 # =====================================
 
 def start_bot():
+    import sys
     try:
-        print("STARTING DISCORD BOT...")
+        print("STARTING DISCORD BOT...", flush=True)
         bot.run(TOKEN)
-    except Exception as e:
-        print(f"DISCORD BOT ERROR: {e}")
+    except BaseException as e:
+        print(f"DISCORD BOT ERROR: {type(e).__name__}: {e}", flush=True)
+        sys.stdout.flush()
 
 # =====================================
 # START EVERYTHING
