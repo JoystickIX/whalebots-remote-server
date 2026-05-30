@@ -43,7 +43,7 @@ EXE_DOWNLOAD_LINK = (
 # SHA-256 of the official WhaleBotsRemote.exe for v1.0.9.
 # The client verifies the downloaded EXE against this before installing.
 # Filled in after the build (leave "" to skip verification).
-LATEST_SHA256 = "9a7b4aa35611e3db7189132fdc16b59740f49213d3aa38bd382881290142e72e"
+LATEST_SHA256 = "e373a6f25e98145941c2f9e817c573f143bd8a6e8929634ce35eb6a4458d97d3"
 
 # =====================================
 # DATABASE
