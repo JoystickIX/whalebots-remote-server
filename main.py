@@ -4,7 +4,7 @@
 
 import discord
 from discord.ext import commands, tasks
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Depends, Request
 from pydantic import BaseModel
 import threading
 import uvicorn
@@ -17,6 +17,7 @@ import tempfile
 import asyncio
 import random
 import time
+import re
 from pymongo import MongoClient
 
 # =====================================
@@ -33,10 +34,10 @@ OWNER_IDS = {316613385485680650, 641191095258185728}
 # AUTO UPDATE
 # =====================================
 
-LATEST_VERSION = "1.0.6"
+LATEST_VERSION = "1.0.7"
 
 EXE_DOWNLOAD_LINK = (
-    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.6/WhaleBotsRemote.exe"
+    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.7/WhaleBotsRemote.exe"
 )
 
 # =====================================
@@ -132,6 +133,53 @@ bot = commands.Bot(
 app = FastAPI()
 
 # =====================================
+# SECRET KEY AUTH
+# =====================================
+
+_SECRET_KEY = os.getenv("WHALEBOTS_SECRET_KEY", "")
+
+def verify_key(x_whalebots_key: str = Header(...)):
+    if not _SECRET_KEY or x_whalebots_key != _SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+auth = Depends(verify_key)
+
+# =====================================
+# RATE LIMITER
+# =====================================
+
+_rate_data: dict = {}  # key -> (count, window_start)
+RATE_LIMIT       = 30  # max requests
+RATE_WINDOW      = 60  # per N seconds
+
+def check_rate_limit(key: str):
+    now   = time.time()
+
+    # Purge stale entries to prevent unbounded memory growth
+    stale = [k for k, (_, start) in _rate_data.items() if now - start > RATE_WINDOW]
+    for k in stale:
+        del _rate_data[k]
+
+    entry = _rate_data.get(key)
+    if entry is None or now - entry[1] > RATE_WINDOW:
+        _rate_data[key] = (1, now)
+        return
+    count, start = entry
+    if count >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    _rate_data[key] = (count + 1, start)
+
+# =====================================
+# CLIENT ID VALIDATOR
+# =====================================
+
+_CLIENT_ID_RE = re.compile(r'^[\w\-\.]{1,64}$')
+
+def validate_client_id(client_id: str):
+    if not _CLIENT_ID_RE.match(client_id):
+        raise HTTPException(status_code=400, detail="Invalid client_id")
+
+# =====================================
 # MODELS
 # =====================================
 
@@ -160,7 +208,7 @@ def home():
 # VERSION API
 # =====================================
 
-@app.get("/version")
+@app.get("/version", dependencies=[auth])
 def version():
     return {
         "version":  LATEST_VERSION,
@@ -171,10 +219,13 @@ def version():
 # REGISTER
 # =====================================
 
-@app.post("/register")
-def register(body: RegisterBody):
+@app.post("/register", dependencies=[auth])
+def register(body: RegisterBody, request: Request):
     if not body.client_id or not body.pair_code:
         return {"success": False}
+
+    validate_client_id(body.client_id)
+    check_rate_limit(f"register:{request.client.host}")
 
     online_clients[body.pair_code] = body.client_id
 
@@ -186,8 +237,10 @@ def register(body: RegisterBody):
 # PAIR CODE
 # =====================================
 
-@app.get("/pair_code/{client_id}")
-def get_pair_code(client_id: str):
+@app.get("/pair_code/{client_id}", dependencies=[auth])
+def get_pair_code(client_id: str, request: Request):
+    validate_client_id(client_id)
+    check_rate_limit(f"pair_code:{request.client.host}")
     doc = _paircodes_col.find_one({"_id": client_id})
     if doc:
         return {"pair_code": doc["pair_code"]}
@@ -201,8 +254,10 @@ def get_pair_code(client_id: str):
 
 COMMAND_TTL = 60  # discard commands older than 60 seconds
 
-@app.get("/command/{client_id}")
-def get_command(client_id: str):
+@app.get("/command/{client_id}", dependencies=[auth])
+def get_command(client_id: str, request: Request):
+    validate_client_id(client_id)
+    check_rate_limit(f"command:{client_id}")
     entry = commands_queue.get(client_id)
 
     if not entry:
@@ -220,13 +275,16 @@ def get_command(client_id: str):
 # STATUS
 # =====================================
 
-@app.post("/status/{client_id}")
-def receive_status(client_id: str, body: StatusBody):
-    status_queue[client_id] = body.message
+@app.post("/status/{client_id}", dependencies=[auth])
+def receive_status(client_id: str, body: StatusBody, request: Request):
+    validate_client_id(client_id)
+    check_rate_limit(f"status:{client_id}")
+    status_queue[client_id] = body.message[:2000]  # cap to Discord's message limit
     return {"success": True}
 
-@app.get("/status/{client_id}")
-def get_status(client_id: str):
+@app.get("/status/{client_id}", dependencies=[auth])
+def get_status(client_id: str, request: Request):
+    validate_client_id(client_id)
     message = status_queue.get(client_id)
 
     if not message:
@@ -240,12 +298,19 @@ def get_status(client_id: str):
 # IMAGE UPLOAD
 # =====================================
 
-@app.post("/upload/{client_id}")
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+@app.post("/upload/{client_id}", dependencies=[auth])
 async def upload_image(
     client_id: str,
+    request: Request,
     file: UploadFile = File(...)
 ):
-    content = await file.read()
+    validate_client_id(client_id)
+    check_rate_limit(f"upload:{client_id}")
+    content = await file.read(MAX_IMAGE_SIZE + 1)
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large")
     image_queue[client_id] = content
     return {"success": True}
 
@@ -253,8 +318,10 @@ async def upload_image(
 # LICENSE VALIDATION
 # =====================================
 
-@app.post("/license/validate")
-def validate_license(body: LicenseValidateBody):
+@app.post("/license/validate", dependencies=[auth])
+def validate_license(body: LicenseValidateBody, request: Request):
+    validate_client_id(body.client_id)
+    check_rate_limit(f"license:{request.client.host}")
     client_id = body.client_id
     licenses  = load_licenses()
     links     = load_links()
@@ -327,6 +394,7 @@ async def check_status():
 
                 async with session.get(
                     f"{SERVER_URL}/status/{client_id}",
+                    headers={"X-WhaleBots-Key": _SECRET_KEY},
                     timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
                     result  = await response.json()
