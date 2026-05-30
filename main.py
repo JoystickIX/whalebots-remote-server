@@ -44,11 +44,20 @@ EXE_DOWNLOAD_LINK = (
 # DATABASE
 # =====================================
 
-_mongo_client  = MongoClient(MONGO_URI)
+_mongo_client  = MongoClient(
+    MONGO_URI,
+    maxPoolSize=50,
+    serverSelectionTimeoutMS=5000,
+    retryWrites=True,
+)
 _db            = _mongo_client["whalebots"]
 _licenses_col  = _db["licenses"]
 _links_col     = _db["links"]
 _paircodes_col = _db["pair_codes"]
+# Durable backing stores so a server restart never loses pending work
+_cmd_col       = _db["cmd_queue"]      # pending commands per client
+_status_col    = _db["status_pending"] # latest pending status msg per client
+_online_col    = _db["online_clients"] # pair_code -> client_id (for !setup)
 
 # =====================================
 # LOAD / SAVE
@@ -105,11 +114,101 @@ def save_licenses(data):
 # STORAGE
 # =====================================
 
-commands_queue   = {}  # client_id -> list of {"command": ..., "queued_at": ...}
-status_queue     = {}
-online_clients   = {}
-image_queue      = {}
-_welcomed_clients = set()  # clients that already received a welcome this session
+commands_queue   = {}  # client_id -> list of {"command":..., "queued_at":..., "_id": mongo_id}
+status_queue     = {}  # client_id -> message (mirror of _status_col)
+online_clients   = {}  # pair_code -> client_id (mirror of _online_col)
+image_queue      = {}  # kept in memory only — images are large and cheap to regenerate
+_welcomed_clients = set()  # per-session; intentionally not persisted
+
+# ─────────────────────────────────────────────────────────────
+# DURABILITY: reload pending work from MongoDB after a restart
+# ─────────────────────────────────────────────────────────────
+
+def _reload_state_from_db():
+    """Repopulate in-memory queues from MongoDB on boot so a server
+    restart never silently drops commands or status messages."""
+    try:
+        _cmd_col.create_index("queued_at")
+        # Commands — preserve FIFO order via queued_at
+        for doc in _cmd_col.find().sort("queued_at", 1):
+            commands_queue.setdefault(doc["client_id"], []).append({
+                "command":   doc["command"],
+                "queued_at": doc["queued_at"],
+                "_id":       doc["_id"],
+            })
+        # Pending status messages
+        for doc in _status_col.find():
+            status_queue[doc["_id"]] = doc["message"]
+        # Online clients (pair_code -> client_id)
+        for doc in _online_col.find():
+            online_clients[doc["_id"]] = doc["client_id"]
+        print(
+            f"STATE RELOADED: {sum(len(v) for v in commands_queue.values())} commands, "
+            f"{len(status_queue)} status, {len(online_clients)} online",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"STATE RELOAD ERROR: {e}", flush=True)
+
+# ── Write-through helpers ─────────────────────────────────────
+
+def queue_command(client_id, command):
+    """Append a command to a client's queue, persisting to MongoDB."""
+    queued_at = time.time()
+    try:
+        res = _cmd_col.insert_one({
+            "client_id": client_id,
+            "command":   command,
+            "queued_at": queued_at,
+        })
+        mongo_id = res.inserted_id
+    except Exception as e:
+        print(f"queue_command DB error: {e}", flush=True)
+        mongo_id = None
+    commands_queue.setdefault(client_id, []).append({
+        "command":   command,
+        "queued_at": queued_at,
+        "_id":       mongo_id,
+    })
+
+def _delete_cmd_doc(entry):
+    mid = entry.get("_id")
+    if mid is not None:
+        try:
+            _cmd_col.delete_one({"_id": mid})
+        except Exception as e:
+            print(f"cmd delete error: {e}", flush=True)
+
+def set_status(client_id, message):
+    status_queue[client_id] = message
+    try:
+        _status_col.replace_one(
+            {"_id": client_id},
+            {"_id": client_id, "message": message},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"set_status DB error: {e}", flush=True)
+
+def consume_status(client_id):
+    status_queue[client_id] = None
+    try:
+        _status_col.delete_one({"_id": client_id})
+    except Exception as e:
+        print(f"consume_status DB error: {e}", flush=True)
+
+def set_online(pair_code, client_id):
+    online_clients[pair_code] = client_id
+    try:
+        _online_col.replace_one(
+            {"_id": pair_code},
+            {"_id": pair_code, "client_id": client_id},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"set_online DB error: {e}", flush=True)
+
+_reload_state_from_db()
 
 # =====================================
 # DISCORD SETTINGS
@@ -228,18 +327,18 @@ def register(body: RegisterBody, request: Request):
     validate_client_id(body.client_id)
     check_rate_limit(f"register:{request.client.host}")
 
-    online_clients[body.pair_code] = body.client_id
+    set_online(body.pair_code, body.client_id)
 
     # Send a welcome message the first time this client connects each session
     if body.client_id not in _welcomed_clients:
         _welcomed_clients.add(body.client_id)
-        status_queue[body.client_id] = (
+        set_status(body.client_id, (
             "👋 **Your Remote Control is Online!**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🖥️ PC: `{body.client_id}`\n"
             "✅ Ready to receive commands\n"
             "Type `!help` to see all available commands 🎮"
-        )
+        ))
 
     print(f"REGISTERED: {body.client_id} ({body.pair_code})")
 
@@ -281,6 +380,7 @@ def get_command(client_id: str, request: Request):
         entry = queue[0]
         if now - entry["queued_at"] > COMMAND_TTL:
             queue.pop(0)
+            _delete_cmd_doc(entry)
             print(f"STALE COMMAND DISCARDED [{client_id}]: {entry['command']}")
         else:
             break
@@ -289,6 +389,7 @@ def get_command(client_id: str, request: Request):
         return {"command": None}
 
     entry = queue.pop(0)
+    _delete_cmd_doc(entry)
     return {"command": entry["command"]}
 
 # =====================================
@@ -299,7 +400,7 @@ def get_command(client_id: str, request: Request):
 def receive_status(client_id: str, body: StatusBody, request: Request):
     validate_client_id(client_id)
     check_rate_limit(f"status:{client_id}")
-    status_queue[client_id] = body.message[:2000]  # cap to Discord's message limit
+    set_status(client_id, body.message[:2000])  # cap to Discord's message limit
     return {"success": True}
 
 @app.get("/status/{client_id}", dependencies=[auth])
@@ -310,7 +411,7 @@ def get_status(client_id: str, request: Request):
     if not message:
         return {"message": None}
 
-    status_queue[client_id] = None
+    consume_status(client_id)
 
     return {"message": message}
 
@@ -642,7 +743,7 @@ async def rok(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": "rok", "queued_at": time.time()})
+    queue_command(data["client_id"], "rok")
 
     await ctx.send("⏳ Launching ROK...")
 
@@ -658,7 +759,7 @@ async def cod(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": "cod", "queued_at": time.time()})
+    queue_command(data["client_id"], "cod")
 
     await ctx.send("⏳ Launching COD...")
 
@@ -674,7 +775,7 @@ async def screen(ctx, target="bot"):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": f"screen {target}", "queued_at": time.time()})
+    queue_command(data["client_id"], f"screen {target}")
 
     await ctx.send(f"📸 Taking screenshot of {target}...")
 
@@ -690,7 +791,7 @@ async def log(ctx, number: int):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": f"log {number}", "queued_at": time.time()})
+    queue_command(data["client_id"], f"log {number}")
 
     await ctx.send(f"📋 Fetching activity log for bot {number}...")
 
@@ -707,7 +808,7 @@ async def tick(ctx, target: str):
         return
 
     if target.lower() == "all":
-        commands_queue.setdefault(data["client_id"], []).append({"command": "tick all", "queued_at": time.time()})
+        queue_command(data["client_id"], "tick all")
         await ctx.send("⏳ Ticking all bots...")
     else:
         try:
@@ -715,7 +816,7 @@ async def tick(ctx, target: str):
         except ValueError:
             await ctx.send("❌ Usage: `!tick <number>` or `!tick all`")
             return
-        commands_queue.setdefault(data["client_id"], []).append({"command": f"tick {number}", "queued_at": time.time()})
+        queue_command(data["client_id"], f"tick {number}")
         await ctx.send(f"⏳ Ticking bot {number}...")
 
 # =====================================
@@ -730,7 +831,7 @@ async def close(ctx, target="all"):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": f"close {target}", "queued_at": time.time()})
+    queue_command(data["client_id"], f"close {target}")
 
     await ctx.send(f"⏳ Closing {target}...")
 
@@ -750,7 +851,7 @@ async def shutdown(ctx, confirm: str = None):
         await ctx.send("⚠️ **Are you sure?** Type `!shutdown confirm` to proceed.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": "shutdown", "queued_at": time.time()})
+    queue_command(data["client_id"], "shutdown")
 
     await ctx.send("🔴 Shutting down PC...")
 
@@ -766,7 +867,7 @@ async def update(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": "update", "queued_at": time.time()})
+    queue_command(data["client_id"], "update")
 
     await ctx.send("🔍 Checking for updates...")
 
