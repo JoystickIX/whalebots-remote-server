@@ -34,11 +34,16 @@ OWNER_IDS = {316613385485680650, 641191095258185728}
 # AUTO UPDATE
 # =====================================
 
-LATEST_VERSION = "1.0.8"
+LATEST_VERSION = "1.0.9"
 
 EXE_DOWNLOAD_LINK = (
-    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.8/WhaleBotsRemote.exe"
+    "https://github.com/JoystickIX/whalebots-remote-server/releases/download/V1.0.9/WhaleBotsRemote.exe"
 )
+
+# SHA-256 of the official WhaleBotsRemote.exe for v1.0.9.
+# The client verifies the downloaded EXE against this before installing.
+# Filled in after the build (leave "" to skip verification).
+LATEST_SHA256 = "87eafae13ab8e231ca577280a94c0d18053fda263f58a8e1594c3fba3cff6a36"
 
 # =====================================
 # DATABASE
@@ -58,6 +63,7 @@ _paircodes_col = _db["pair_codes"]
 _cmd_col       = _db["cmd_queue"]      # pending commands per client
 _status_col    = _db["status_pending"] # latest pending status msg per client
 _online_col    = _db["online_clients"] # pair_code -> client_id (for !setup)
+_tokens_col    = _db["client_tokens"]  # client_id -> per-client auth token
 
 # =====================================
 # LOAD / SAVE
@@ -132,6 +138,7 @@ commands_queue   = {}  # client_id -> list of {"command":..., "queued_at":..., "
 status_queue     = {}  # client_id -> list of {"message":..., "queued_at":..., "_id": mongo_id}
 online_clients   = {}  # pair_code -> client_id (mirror of _online_col)
 image_queue      = {}  # kept in memory only — images are large and cheap to regenerate
+client_tokens    = {}  # client_id -> per-client auth token (mirror of _tokens_col)
 _welcomed_clients = set()  # per-session; intentionally not persisted
 
 # ─────────────────────────────────────────────────────────────
@@ -161,9 +168,13 @@ def _reload_state_from_db():
         # Online clients (pair_code -> client_id)
         for doc in _online_col.find():
             online_clients[doc["_id"]] = doc["client_id"]
+        # Per-client auth tokens
+        for doc in _tokens_col.find():
+            client_tokens[doc["_id"]] = doc["token"]
         print(
             f"STATE RELOADED: {sum(len(v) for v in commands_queue.values())} commands, "
-            f"{len(status_queue)} status, {len(online_clients)} online",
+            f"{len(status_queue)} status, {len(online_clients)} online, "
+            f"{len(client_tokens)} tokens",
             flush=True,
         )
     except Exception as e:
@@ -247,6 +258,25 @@ def set_online(pair_code, client_id):
     except Exception as e:
         print(f"set_online DB error: {e}", flush=True)
 
+def issue_token(client_id):
+    """Return the client's existing per-client token, or mint a new one.
+    Stored server-side and never derivable from the shared key, so one
+    customer cannot act on another customer's client_id."""
+    existing = client_tokens.get(client_id)
+    if existing:
+        return existing
+    token = secrets.token_urlsafe(32)
+    client_tokens[client_id] = token
+    try:
+        _tokens_col.replace_one(
+            {"_id": client_id},
+            {"_id": client_id, "token": token},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"issue_token DB error: {e}", flush=True)
+    return token
+
 _reload_state_from_db()
 
 # =====================================
@@ -291,7 +321,7 @@ _rate_data: dict = {}  # key -> (count, window_start)
 RATE_LIMIT       = 30  # max requests
 RATE_WINDOW      = 60  # per N seconds
 
-def check_rate_limit(key: str):
+def check_rate_limit(key: str, limit: int = RATE_LIMIT):
     now   = time.time()
 
     # Purge stale entries to prevent unbounded memory growth
@@ -304,9 +334,34 @@ def check_rate_limit(key: str):
         _rate_data[key] = (1, now)
         return
     count, start = entry
-    if count >= RATE_LIMIT:
+    if count >= limit:
         raise HTTPException(status_code=429, detail="Too many requests")
     _rate_data[key] = (count + 1, start)
+
+def client_ip(request: Request) -> str:
+    """Real client IP. Behind Railway's proxy request.client.host is the
+    proxy, so prefer the first hop in X-Forwarded-For when present."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+# =====================================
+# PER-CLIENT TOKEN AUTH
+# =====================================
+
+def verify_token(client_id: str, request: Request):
+    """For client-specific endpoints. If this client has been issued a
+    per-client token (i.e. it's running a token-aware build), require a
+    matching token. Legacy clients without a token fall back to the
+    shared-key check only — so the rollout tightens automatically as
+    clients update, with no breakage."""
+    expected = client_tokens.get(client_id)
+    if expected is None:
+        return  # legacy client; shared-key auth already enforced
+    provided = request.headers.get("x-whalebots-token", "")
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail="Invalid client token")
 
 # =====================================
 # CLIENT ID VALIDATOR
@@ -325,6 +380,8 @@ def validate_client_id(client_id: str):
 class RegisterBody(BaseModel):
     client_id: str
     pair_code: str
+    token_auth: bool = False  # new clients set this to opt into per-client tokens
+    version: str = ""
 
 class StatusBody(BaseModel):
     message: str
@@ -351,7 +408,8 @@ def home():
 def version():
     return {
         "version":  LATEST_VERSION,
-        "download": EXE_DOWNLOAD_LINK
+        "download": EXE_DOWNLOAD_LINK,
+        "sha256":   LATEST_SHA256
     }
 
 # =====================================
@@ -364,7 +422,7 @@ def register(body: RegisterBody, request: Request):
         return {"success": False}
 
     validate_client_id(body.client_id)
-    check_rate_limit(f"register:{request.client.host}")
+    check_rate_limit(f"register:{client_ip(request)}")
 
     set_online(body.pair_code, body.client_id)
 
@@ -379,9 +437,15 @@ def register(body: RegisterBody, request: Request):
             "Type `!help` to see all available commands 🎮"
         ))
 
-    print(f"REGISTERED: {body.client_id} ({body.pair_code})")
+    print(f"REGISTERED: {body.client_id} ({body.pair_code}) v{body.version}")
 
-    return {"success": True}
+    resp = {"success": True}
+    # New (token-aware) clients receive a unique per-client token to use
+    # on all subsequent client-specific requests.
+    if body.token_auth:
+        resp["token"] = issue_token(body.client_id)
+
+    return resp
 
 # =====================================
 # PAIR CODE
@@ -390,11 +454,15 @@ def register(body: RegisterBody, request: Request):
 @app.get("/pair_code/{client_id}", dependencies=[auth])
 def get_pair_code(client_id: str, request: Request):
     validate_client_id(client_id)
-    check_rate_limit(f"pair_code:{request.client.host}")
+    # Tight limit: the pair code is a bootstrap secret, so throttle hard
+    # to make enumeration/harvesting across many client_ids impractical.
+    check_rate_limit(f"pair_code:{client_ip(request)}", limit=10)
     doc = _paircodes_col.find_one({"_id": client_id})
     if doc:
         return {"pair_code": doc["pair_code"]}
-    code = str(random.randint(100000, 999999))
+    # 12 hex chars (~48 bits) instead of 6 digits — infeasible to guess,
+    # still short enough to read off-screen and type into Discord.
+    code = secrets.token_hex(6).upper()
     _paircodes_col.insert_one({"_id": client_id, "pair_code": code})
     return {"pair_code": code}
 
@@ -407,6 +475,7 @@ COMMAND_TTL = 300  # discard commands older than 5 minutes
 @app.get("/command/{client_id}", dependencies=[auth])
 def get_command(client_id: str, request: Request):
     validate_client_id(client_id)
+    verify_token(client_id, request)
     check_rate_limit(f"command:{client_id}")
     queue = commands_queue.get(client_id)
 
@@ -438,6 +507,7 @@ def get_command(client_id: str, request: Request):
 @app.post("/status/{client_id}", dependencies=[auth])
 def receive_status(client_id: str, body: StatusBody, request: Request):
     validate_client_id(client_id)
+    verify_token(client_id, request)
     check_rate_limit(f"status:{client_id}")
     add_status(client_id, body.message[:2000])  # cap to Discord's message limit
     return {"success": True}
@@ -465,6 +535,7 @@ async def upload_image(
     file: UploadFile = File(...)
 ):
     validate_client_id(client_id)
+    verify_token(client_id, request)
     check_rate_limit(f"upload:{client_id}")
     content = await file.read(MAX_IMAGE_SIZE + 1)
     if len(content) > MAX_IMAGE_SIZE:
@@ -479,7 +550,7 @@ async def upload_image(
 @app.post("/license/validate", dependencies=[auth])
 def validate_license(body: LicenseValidateBody, request: Request):
     validate_client_id(body.client_id)
-    check_rate_limit(f"license:{request.client.host}")
+    check_rate_limit(f"license:{client_ip(request)}")
     client_id = body.client_id
     licenses  = load_licenses()
     links     = load_links()
