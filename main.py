@@ -105,7 +105,7 @@ def save_licenses(data):
 # STORAGE
 # =====================================
 
-commands_queue   = {}
+commands_queue   = {}  # client_id -> list of {"command": ..., "queued_at": ...}
 status_queue     = {}
 online_clients   = {}
 image_queue      = {}
@@ -270,17 +270,25 @@ COMMAND_TTL = 60  # discard commands older than 60 seconds
 def get_command(client_id: str, request: Request):
     validate_client_id(client_id)
     check_rate_limit(f"command:{client_id}")
-    entry = commands_queue.get(client_id)
+    queue = commands_queue.get(client_id)
 
-    if not entry:
+    if not queue:
         return {"command": None}
 
-    commands_queue[client_id] = None
+    # Discard stale commands from the front of the queue
+    now = time.time()
+    while queue:
+        entry = queue[0]
+        if now - entry["queued_at"] > COMMAND_TTL:
+            queue.pop(0)
+            print(f"STALE COMMAND DISCARDED [{client_id}]: {entry['command']}")
+        else:
+            break
 
-    if time.time() - entry["queued_at"] > COMMAND_TTL:
-        print(f"STALE COMMAND DISCARDED [{client_id}]: {entry['command']}")
+    if not queue:
         return {"command": None}
 
+    entry = queue.pop(0)
     return {"command": entry["command"]}
 
 # =====================================
@@ -633,7 +641,7 @@ async def rok(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": "rok", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": "rok", "queued_at": time.time()})
 
     await ctx.send("⏳ Launching ROK...")
 
@@ -649,7 +657,7 @@ async def cod(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": "cod", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": "cod", "queued_at": time.time()})
 
     await ctx.send("⏳ Launching COD...")
 
@@ -665,7 +673,7 @@ async def screen(ctx, target="bot"):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": f"screen {target}", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": f"screen {target}", "queued_at": time.time()})
 
     await ctx.send(f"📸 Taking screenshot of {target}...")
 
@@ -681,7 +689,7 @@ async def log(ctx, number: int):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": f"log {number}", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": f"log {number}", "queued_at": time.time()})
 
     await ctx.send(f"📋 Fetching activity log for bot {number}...")
 
@@ -697,7 +705,7 @@ async def tick(ctx, number: int):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": f"tick {number}", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": f"tick {number}", "queued_at": time.time()})
 
     await ctx.send(f"⏳ Ticking bot {number}...")
 
@@ -713,7 +721,7 @@ async def close(ctx, target="all"):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": f"close {target}", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": f"close {target}", "queued_at": time.time()})
 
     await ctx.send(f"⏳ Closing {target}...")
 
@@ -733,7 +741,7 @@ async def shutdown(ctx, confirm: str = None):
         await ctx.send("⚠️ **Are you sure?** Type `!shutdown confirm` to proceed.")
         return
 
-    commands_queue[data["client_id"]] = {"command": "shutdown", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": "shutdown", "queued_at": time.time()})
 
     await ctx.send("🔴 Shutting down PC...")
 
@@ -749,7 +757,7 @@ async def update(ctx):
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue[data["client_id"]] = {"command": "update", "queued_at": time.time()}
+    commands_queue.setdefault(data["client_id"], []).append({"command": "update", "queued_at": time.time()})
 
     await ctx.send("🔍 Checking for updates...")
 
