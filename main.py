@@ -105,10 +105,11 @@ def save_licenses(data):
 # STORAGE
 # =====================================
 
-commands_queue = {}
-status_queue   = {}
-online_clients = {}
-image_queue    = {}
+commands_queue   = {}
+status_queue     = {}
+online_clients   = {}
+image_queue      = {}
+_welcomed_clients = set()  # clients that already received a welcome this session
 
 # =====================================
 # DISCORD SETTINGS
@@ -228,6 +229,17 @@ def register(body: RegisterBody, request: Request):
     check_rate_limit(f"register:{request.client.host}")
 
     online_clients[body.pair_code] = body.client_id
+
+    # Send a welcome message the first time this client connects each session
+    if body.client_id not in _welcomed_clients:
+        _welcomed_clients.add(body.client_id)
+        status_queue[body.client_id] = (
+            "👋 **Your Remote Control is Online!**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🖥️ PC: `{body.client_id}`\n"
+            "✅ Ready to receive commands\n"
+            "Type `!help` to see all available commands 🎮"
+        )
 
     print(f"REGISTERED: {body.client_id} ({body.pair_code})")
 
