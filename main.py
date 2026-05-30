@@ -25,7 +25,7 @@ from pymongo import MongoClient
 # =====================================
 
 TOKEN      = os.getenv("DISCORD_TOKEN")
-SERVER_URL = os.getenv("SERVER_URL", "https://whalebots-remote-server.onrender.com")
+SERVER_URL = os.getenv("SERVER_URL", "https://whalebots-remote-server-production.up.railway.app")
 MONGO_URI  = os.getenv("MONGO_URI")
 
 OWNER_IDS = {316613385485680650, 641191095258185728}
@@ -1007,5 +1007,5 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000))
+        port=int(os.environ.get("PORT", 8080))
     )
