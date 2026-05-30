@@ -537,8 +537,9 @@ async def help(ctx):
             "`!screen bot` - Screenshot WhaleBots\n"
             "`!screen <number>` - Screenshot emulator\n"
             "Example: `!screen 1`\n\n"
-            "`!tick <number>` - Toggle selected window\n"
-            "Example: `!tick 1`\n\n"
+            "`!tick <number>` - Toggle a specific bot\n"
+            "`!tick all` - Tick all bots\n"
+            "Example: `!tick 1`, `!tick all`\n\n"
             "`!log <number>` - Read activity log for a bot\n"
             "Example: `!log 1`"
         ),
@@ -698,16 +699,24 @@ async def log(ctx, number: int):
 # =====================================
 
 @bot.command()
-async def tick(ctx, number: int):
+async def tick(ctx, target: str):
     data = get_client(ctx.author.id)
 
     if not data:
         await ctx.send("⚠️ Use `!setup CODE` first.")
         return
 
-    commands_queue.setdefault(data["client_id"], []).append({"command": f"tick {number}", "queued_at": time.time()})
-
-    await ctx.send(f"⏳ Ticking bot {number}...")
+    if target.lower() == "all":
+        commands_queue.setdefault(data["client_id"], []).append({"command": "tick all", "queued_at": time.time()})
+        await ctx.send("⏳ Ticking all bots...")
+    else:
+        try:
+            number = int(target)
+        except ValueError:
+            await ctx.send("❌ Usage: `!tick <number>` or `!tick all`")
+            return
+        commands_queue.setdefault(data["client_id"], []).append({"command": f"tick {number}", "queued_at": time.time()})
+        await ctx.send(f"⏳ Ticking bot {number}...")
 
 # =====================================
 # CLOSE
