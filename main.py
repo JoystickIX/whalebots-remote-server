@@ -386,9 +386,18 @@ def validate_license(body: LicenseValidateBody, request: Request):
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
+    print(f"Logged in as {bot.user}", flush=True)
     check_status.start()
     check_images.start()
+
+# =====================================
+# FASTAPI STARTUP
+# =====================================
+
+@app.on_event("startup")
+async def startup_event():
+    threading.Thread(target=start_bot, daemon=True).start()
+    print("Discord bot thread started.", flush=True)
 
 # =====================================
 # STATUS LOOP
@@ -1000,12 +1009,6 @@ def start_bot():
 # =====================================
 
 if __name__ == "__main__":
-
-    threading.Thread(
-        target=start_bot,
-        daemon=True
-    ).start()
-
     uvicorn.run(
         app,
         host="0.0.0.0",
