@@ -95,11 +95,24 @@ def save_links(data):
         )
     _links_cache_time = 0  # invalidate cache
 
+_licenses_cache      = {}
+_licenses_cache_time = 0
+LICENSES_CACHE_TTL   = 10  # seconds
+
+def _invalidate_licenses_cache():
+    global _licenses_cache_time
+    _licenses_cache_time = 0
+
 def load_licenses():
+    global _licenses_cache, _licenses_cache_time
+    if time.time() - _licenses_cache_time < LICENSES_CACHE_TTL:
+        return _licenses_cache
     result = {}
     for doc in _licenses_col.find():
         key = doc["_id"]
         result[key] = {k: v for k, v in doc.items() if k != "_id"}
+    _licenses_cache      = result
+    _licenses_cache_time = time.time()
     return result
 
 def save_licenses(data):
@@ -109,13 +122,14 @@ def save_licenses(data):
             {"$set": entry},
             upsert=True
         )
+    _invalidate_licenses_cache()
 
 # =====================================
 # STORAGE
 # =====================================
 
 commands_queue   = {}  # client_id -> list of {"command":..., "queued_at":..., "_id": mongo_id}
-status_queue     = {}  # client_id -> message (mirror of _status_col)
+status_queue     = {}  # client_id -> list of {"message":..., "queued_at":..., "_id": mongo_id}
 online_clients   = {}  # pair_code -> client_id (mirror of _online_col)
 image_queue      = {}  # kept in memory only — images are large and cheap to regenerate
 _welcomed_clients = set()  # per-session; intentionally not persisted
@@ -129,6 +143,7 @@ def _reload_state_from_db():
     restart never silently drops commands or status messages."""
     try:
         _cmd_col.create_index("queued_at")
+        _status_col.create_index("queued_at")
         # Commands — preserve FIFO order via queued_at
         for doc in _cmd_col.find().sort("queued_at", 1):
             commands_queue.setdefault(doc["client_id"], []).append({
@@ -136,9 +151,13 @@ def _reload_state_from_db():
                 "queued_at": doc["queued_at"],
                 "_id":       doc["_id"],
             })
-        # Pending status messages
-        for doc in _status_col.find():
-            status_queue[doc["_id"]] = doc["message"]
+        # Pending status messages — FIFO list per client
+        for doc in _status_col.find().sort("queued_at", 1):
+            status_queue.setdefault(doc["client_id"], []).append({
+                "message":   doc["message"],
+                "queued_at": doc["queued_at"],
+                "_id":       doc["_id"],
+            })
         # Online clients (pair_code -> client_id)
         for doc in _online_col.find():
             online_clients[doc["_id"]] = doc["client_id"]
@@ -179,23 +198,43 @@ def _delete_cmd_doc(entry):
         except Exception as e:
             print(f"cmd delete error: {e}", flush=True)
 
-def set_status(client_id, message):
-    status_queue[client_id] = message
+def add_status(client_id, message):
+    """Append a status message (FIFO) so rapid messages never overwrite
+    each other, persisting to MongoDB."""
+    queued_at = time.time()
     try:
-        _status_col.replace_one(
-            {"_id": client_id},
-            {"_id": client_id, "message": message},
-            upsert=True,
-        )
+        res = _status_col.insert_one({
+            "client_id": client_id,
+            "message":   message,
+            "queued_at": queued_at,
+        })
+        mongo_id = res.inserted_id
     except Exception as e:
-        print(f"set_status DB error: {e}", flush=True)
+        print(f"add_status DB error: {e}", flush=True)
+        mongo_id = None
+    status_queue.setdefault(client_id, []).append({
+        "message":   message,
+        "queued_at": queued_at,
+        "_id":       mongo_id,
+    })
 
-def consume_status(client_id):
-    status_queue[client_id] = None
-    try:
-        _status_col.delete_one({"_id": client_id})
-    except Exception as e:
-        print(f"consume_status DB error: {e}", flush=True)
+def drain_status(client_id):
+    """Pop all pending status messages for a client (in order),
+    deleting their MongoDB docs. Returns a list of message strings."""
+    entries = status_queue.get(client_id)
+    if not entries:
+        return []
+    status_queue[client_id] = []
+    messages = []
+    for entry in entries:
+        messages.append(entry["message"])
+        mid = entry.get("_id")
+        if mid is not None:
+            try:
+                _status_col.delete_one({"_id": mid})
+            except Exception as e:
+                print(f"status delete error: {e}", flush=True)
+    return messages
 
 def set_online(pair_code, client_id):
     online_clients[pair_code] = client_id
@@ -332,7 +371,7 @@ def register(body: RegisterBody, request: Request):
     # Send a welcome message the first time this client connects each session
     if body.client_id not in _welcomed_clients:
         _welcomed_clients.add(body.client_id)
-        set_status(body.client_id, (
+        add_status(body.client_id, (
             "👋 **Your Remote Control is Online!**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🖥️ PC: `{body.client_id}`\n"
@@ -400,20 +439,18 @@ def get_command(client_id: str, request: Request):
 def receive_status(client_id: str, body: StatusBody, request: Request):
     validate_client_id(client_id)
     check_rate_limit(f"status:{client_id}")
-    set_status(client_id, body.message[:2000])  # cap to Discord's message limit
+    add_status(client_id, body.message[:2000])  # cap to Discord's message limit
     return {"success": True}
 
 @app.get("/status/{client_id}", dependencies=[auth])
 def get_status(client_id: str, request: Request):
+    # Kept for backward compatibility. The Discord bot now reads status
+    # directly from memory (see check_status), so this is rarely used.
     validate_client_id(client_id)
-    message = status_queue.get(client_id)
-
-    if not message:
+    messages = drain_status(client_id)
+    if not messages:
         return {"message": None}
-
-    consume_status(client_id)
-
-    return {"message": message}
+    return {"message": "\n".join(messages)}
 
 # =====================================
 # IMAGE UPLOAD
@@ -482,6 +519,7 @@ def validate_license(body: LicenseValidateBody, request: Request):
 
     if entry.get("bound_client") is None:
         _licenses_col.update_one({"_id": key}, {"$set": {"bound_client": client_id}})
+        _invalidate_licenses_cache()
 
     return {
         "valid":    True,
@@ -514,29 +552,29 @@ async def startup_event():
 
 @tasks.loop(seconds=2)
 async def check_status():
+    # Reads status directly from in-memory queue (same process) — no HTTP
+    # self-call, so a brief network/server hiccup can't drop a message.
     links = load_links()
 
-    async with aiohttp.ClientSession() as session:
-        for user_id, data in links.items():
-            try:
-                client_id  = data["client_id"]
-                channel_id = data["channel_id"]
+    for user_id, data in links.items():
+        try:
+            client_id  = data["client_id"]
+            channel_id = data["channel_id"]
 
-                async with session.get(
-                    f"{SERVER_URL}/status/{client_id}",
-                    headers={"X-WhaleBots-Key": _SECRET_KEY},
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
-                    result  = await response.json()
-                    message = result.get("message")
+            # Peek first — only drain if we have a channel to deliver to,
+            # otherwise leave messages queued for the next tick.
+            if not status_queue.get(client_id):
+                continue
 
-                if message:
-                    channel = bot.get_channel(channel_id)
-                    if channel:
-                        await channel.send(message)
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                continue
 
-            except Exception as e:
-                print(f"check_status error [{user_id}]: {e}")
+            for message in drain_status(client_id):
+                await channel.send(message)
+
+        except Exception as e:
+            print(f"check_status error [{user_id}]: {e}")
 
 # =====================================
 # IMAGE LOOP
@@ -1010,6 +1048,7 @@ async def rmlicense(ctx, member: discord.Member = None):
         return
 
     _licenses_col.update_one({"_id": key}, {"$set": {"active": False}})
+    _invalidate_licenses_cache()
 
     embed = discord.Embed(title="🚫 License Revoked", color=0xff0000)
     embed.add_field(name="User", value=member.mention, inline=True)
@@ -1049,6 +1088,7 @@ async def reducelicense(ctx, member: discord.Member = None, days: int = None):
     new_expires = (expiry_date - datetime.timedelta(days=days)).isoformat()
 
     _licenses_col.update_one({"_id": key}, {"$set": {"expires": new_expires}})
+    _invalidate_licenses_cache()
 
     embed = discord.Embed(title="✂️ License Reduced", color=0xffa500)
     embed.add_field(name="User",        value=member.mention, inline=True)
