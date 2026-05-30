@@ -140,6 +140,7 @@ online_clients   = {}  # pair_code -> client_id (mirror of _online_col)
 image_queue      = {}  # kept in memory only — images are large and cheap to regenerate
 client_tokens    = {}  # client_id -> per-client auth token (mirror of _tokens_col)
 _welcomed_clients = set()  # per-session; intentionally not persisted
+_license_notified = {}     # client_id -> bool; one-shot "license expired" status, reset on re-validation
 
 # ─────────────────────────────────────────────────────────────
 # DURABILITY: reload pending work from MongoDB after a restart
@@ -477,6 +478,22 @@ def get_command(client_id: str, request: Request):
     validate_client_id(client_id)
     verify_token(client_id, request)
     check_rate_limit(f"command:{client_id}")
+
+    # Server-side license gate: an expired/disabled/cracked client gets nothing.
+    if not license_ok(client_id):
+        queue = commands_queue.get(client_id)
+        if queue:
+            for entry in queue:
+                _delete_cmd_doc(entry)
+            commands_queue[client_id] = []
+        if not _license_notified.get(client_id):
+            add_status(client_id, "❌ Your license has expired or is inactive. Control is disabled — contact the owner.")
+            _license_notified[client_id] = True
+        return {"command": None}
+    # License is valid again — reset the one-shot notice flag
+    if _license_notified.get(client_id):
+        _license_notified[client_id] = False
+
     queue = commands_queue.get(client_id)
 
     if not queue:
@@ -705,6 +722,44 @@ def get_license_by_discord(discord_id):
         if entry.get("discord_id") == str(discord_id):
             return key, entry
     return None, None
+
+def license_ok(client_id: str) -> bool:
+    """Server-side license gate. Same lookup as /license/validate but
+    returns only a bool. Uses cached reads — safe for the hot /command path."""
+    licenses = load_licenses()
+    links    = load_links()
+
+    entry = None
+    # 1) license bound directly to this PC
+    for e in licenses.values():
+        if e.get("bound_client") == client_id:
+            entry = e
+            break
+    # 2) fall back to the Discord link (license issued but not yet bound)
+    if entry is None:
+        discord_id = None
+        for uid, data in links.items():
+            if data.get("client_id") == client_id:
+                discord_id = uid
+                break
+        if discord_id:
+            for e in licenses.values():
+                if e.get("discord_id") == str(discord_id):
+                    entry = e
+                    break
+
+    if entry is None:
+        return False
+    if not entry.get("active", False):
+        return False
+    expires = entry.get("expires")
+    if expires:
+        try:
+            if datetime.date.today() > datetime.date.fromisoformat(expires):
+                return False
+        except (ValueError, TypeError):
+            return False
+    return True
 
 # =====================================
 # HELP
