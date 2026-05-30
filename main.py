@@ -264,7 +264,7 @@ def get_pair_code(client_id: str, request: Request):
 # COMMAND
 # =====================================
 
-COMMAND_TTL = 60  # discard commands older than 60 seconds
+COMMAND_TTL = 300  # discard commands older than 5 minutes
 
 @app.get("/command/{client_id}", dependencies=[auth])
 def get_command(client_id: str, request: Request):
