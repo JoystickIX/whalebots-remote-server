@@ -1240,9 +1240,18 @@ async def license(
 
         if entry is not None:
             current_expires = entry.get("expires")
+            # !rmlicense is a soft-disable (active=False) and deliberately keeps
+            # the old expiry for the record. So a re-grant must start a FRESH
+            # term from today — resuming the stale date would silently hand the
+            # customer back the days they were revoked.
+            was_revoked = not entry.get("active", False)
 
             if days <= 0:
-                new_expires = None
+                new_expires = None                      # lifetime
+            elif was_revoked:
+                new_expires = (
+                    datetime.date.today() + datetime.timedelta(days=days)
+                ).isoformat()
             elif current_expires:
                 base = max(
                     datetime.date.fromisoformat(current_expires),
@@ -1250,7 +1259,7 @@ async def license(
                 )
                 new_expires = (base + datetime.timedelta(days=days)).isoformat()
             else:
-                new_expires = None
+                new_expires = None                      # active lifetime stays lifetime
 
             licenses[key]["expires"] = new_expires
             licenses[key]["active"]  = True
@@ -1259,11 +1268,13 @@ async def license(
             display_expires = new_expires or "Lifetime"
 
             embed = discord.Embed(
-                title="License Extended",
+                title="License Re-Issued" if was_revoked else "License Extended",
                 color=0x00b04f
             )
             embed.add_field(name="User",       value=member.mention,  inline=True)
             embed.add_field(name="New Expiry", value=display_expires, inline=True)
+            if was_revoked:
+                embed.set_footer(text="Previous license was revoked — new term starts today.")
 
             await ctx.send(embed=embed)
             return
