@@ -101,6 +101,12 @@ def save_links(data):
         )
     _links_cache_time = 0  # invalidate cache
 
+def delete_link(user_id):
+    """Remove a Discord -> PC link (the !setup binding)."""
+    global _links_cache_time
+    _links_col.delete_one({"_id": str(user_id)})
+    _links_cache_time = 0  # invalidate cache
+
 _licenses_cache      = {}
 _licenses_cache_time = 0
 LICENSES_CACHE_TTL   = 10  # seconds
@@ -135,6 +141,12 @@ def save_licenses(data):
 # =====================================
 
 commands_queue   = {}  # client_id -> list of {"command":..., "queued_at":..., "_id": mongo_id}
+# Farewell commands survive the license gate: when a PC is unbound its license
+# is already invalid, so anything in commands_queue would be discarded before
+# delivery. These are served first and are the ONLY commands an unlicensed
+# client may receive — they exist to shut that PC down cleanly, nothing else.
+farewell_queue   = {}  # client_id -> {"commands": [...], "queued_at": ts}
+FAREWELL_TTL     = 300  # give the old PC 5 min to collect them, then give up
 status_queue     = {}  # client_id -> list of {"message":..., "queued_at":..., "_id": mongo_id}
 online_clients   = {}  # pair_code -> client_id (mirror of _online_col)
 image_queue      = {}  # kept in memory only — images are large and cheap to regenerate
@@ -479,6 +491,20 @@ def get_command(client_id: str, request: Request):
     verify_token(client_id, request)
     check_rate_limit(f"command:{client_id}")
 
+    # Farewell commands are served BEFORE the license gate — an unbound PC has
+    # an invalid license by definition, and these exist purely to close it down.
+    farewell = farewell_queue.get(client_id)
+    if farewell:
+        if time.time() - farewell["queued_at"] > FAREWELL_TTL:
+            farewell_queue.pop(client_id, None)      # PC never came back; drop it
+        elif farewell["commands"]:
+            cmd = farewell["commands"].pop(0)
+            if not farewell["commands"]:
+                farewell_queue.pop(client_id, None)  # last one — done
+            return {"command": cmd}
+        else:
+            farewell_queue.pop(client_id, None)
+
     # Server-side license gate: an expired/disabled/cracked client gets nothing.
     if not license_ok(client_id):
         queue = commands_queue.get(client_id)
@@ -723,6 +749,69 @@ def get_license_by_discord(discord_id):
             return key, entry
     return None, None
 
+# ---- Unbind / reverse-!setup ------------------------------------------------
+# !setup creates TWO bindings, and both must be cleared or the customer can
+# never re-bind on a new PC:
+#   1. links[discord_id]          -> the Discord/PC link  (written by !setup)
+#   2. licenses[key].bound_client -> the hardware lock    (written by
+#      /license/validate). If this is left set, the new PC fails validation
+#      with "No license found" because the link fallback only matches
+#      licenses whose bound_client is None.
+UNBIND_COOLDOWN_DAYS = 7
+
+def unbind_cooldown_remaining(discord_id) -> int:
+    """Days left before this user may self-unlink again (0 = allowed now)."""
+    _, entry = get_license_by_discord(discord_id)
+    if not entry:
+        return 0                      # no license => nothing to hop; allow
+    last = entry.get("unbound_at")
+    if not last:
+        return 0
+    try:
+        last_date = datetime.date.fromisoformat(last)
+    except ValueError:
+        return 0
+    elapsed = (datetime.date.today() - last_date).days
+    return max(0, UNBIND_COOLDOWN_DAYS - elapsed)
+
+def perform_unbind(discord_id, stamp_cooldown: bool):
+    """Clear BOTH bindings for a user. Returns (client_id_or_None, had_license).
+
+    stamp_cooldown=True records the date so !unlink is rate-limited;
+    owner-driven !unbind passes False so support fixes are never blocked.
+    """
+    data      = get_client(discord_id)
+    client_id = data["client_id"] if data else None
+
+    # 1) drop the Discord -> PC link
+    if data:
+        delete_link(discord_id)
+
+    # 2) release the license's hardware lock
+    key, entry = get_license_by_discord(discord_id)
+    if key:
+        update = {"bound_client": None}
+        if stamp_cooldown:
+            update["unbound_at"] = datetime.date.today().isoformat()
+        _licenses_col.update_one({"_id": key}, {"$set": update})
+        _invalidate_licenses_cache()
+
+    # 3) drop anything still queued for the old PC, then tell it to shut down:
+    #    close every game/emulator window, then exit the client itself.
+    if client_id:
+        queue = commands_queue.get(client_id)
+        if queue:
+            for e in queue:
+                _delete_cmd_doc(e)
+            commands_queue[client_id] = []
+        _license_notified.pop(client_id, None)
+        farewell_queue[client_id] = {
+            "commands":  ["close all", "exit"],
+            "queued_at": time.time()
+        }
+
+    return client_id, key is not None
+
 def license_ok(client_id: str) -> bool:
     """Server-side license gate. Same lookup as /license/validate but
     returns only a bool. Uses cached reads — safe for the hot /command path."""
@@ -783,7 +872,10 @@ async def help(ctx):
 
     embed.add_field(
         name="Setup",
-        value="`!setup CODE` - Link your Discord account",
+        value=(
+            "`!setup CODE` - Link your Discord account\n"
+            "`!unlink confirm` - Release your PC (to move to a new one)"
+        ),
         inline=False
     )
 
@@ -865,6 +957,15 @@ async def helpowner(ctx):
     )
 
     embed.add_field(
+        name="Binding",
+        value=(
+            "`!unbind @user` - Release a customer's PC + license lock\n"
+            "(no cooldown — use when a customer changed PC)"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
         name="Client Overview",
         value="`!clients` - List all active subscribers",
         inline=False
@@ -894,6 +995,87 @@ async def setup(ctx, pair_code: str):
     save_links(links)
 
     await ctx.send(f"✅ Linked to `{client_id}`")
+
+# =====================================
+# UNLINK  (reverse of !setup)
+# =====================================
+
+@bot.command()
+async def unlink(ctx, confirm: str = None):
+    """Customer self-service: release this Discord account from its PC so the
+    EXE can be set up on a different machine. Rate-limited so a license can't
+    be hopped between PCs freely."""
+    data       = get_client(ctx.author.id)
+    key, entry = get_license_by_discord(ctx.author.id)
+
+    if not data and not (entry and entry.get("bound_client")):
+        await ctx.send("⚠️ Nothing to unlink — you're not set up on any PC.")
+        return
+
+    remaining = unbind_cooldown_remaining(ctx.author.id)
+    if remaining > 0:
+        await ctx.send(
+            f"⏳ You unlinked recently. You can unlink again in **{remaining} day(s)**.\n"
+            "If you need it sooner, ask an owner."
+        )
+        return
+
+    if confirm != "confirm":
+        current = data["client_id"] if data else entry.get("bound_client")
+        await ctx.send(
+            f"⚠️ **Are you sure?** This releases your license from `{current}`.\n"
+            f"You'll need to run `!setup CODE` again on the new PC, and you "
+            f"can only do this once every **{UNBIND_COOLDOWN_DAYS} days**.\n"
+            "Type `!unlink confirm` to proceed."
+        )
+        return
+
+    client_id, had_license = perform_unbind(ctx.author.id, stamp_cooldown=True)
+
+    embed = discord.Embed(
+        title="🔓 Unlinked",
+        description="Run the EXE on your new PC, then `!setup CODE` to link it.",
+        color=0x00b04f
+    )
+    embed.add_field(name="Released PC", value=f"`{client_id or 'none'}`", inline=False)
+    embed.add_field(
+        name="License",
+        value="Freed — ready to bind to a new PC." if had_license else "No license on file.",
+        inline=False
+    )
+    embed.set_footer(text=f"Next self-unlink available in {UNBIND_COOLDOWN_DAYS} days.")
+    await ctx.send(embed=embed)
+
+# =====================================
+# UNBIND  (owner override, no cooldown)
+# =====================================
+
+@bot.command()
+async def unbind(ctx, member: discord.Member = None):
+    if ctx.author.id not in OWNER_IDS:
+        await ctx.send("❌ Only owner can unbind.")
+        return
+
+    if member is None:
+        await ctx.send("Usage: `!unbind @user`")
+        return
+
+    client_id, had_license = perform_unbind(member.id, stamp_cooldown=False)
+
+    if not client_id and not had_license:
+        await ctx.send(f"⚠️ {member.mention} has no link or license to clear.")
+        return
+
+    embed = discord.Embed(title="🔓 Unbound (owner)", color=0x00b04f)
+    embed.add_field(name="User",        value=member.mention,               inline=True)
+    embed.add_field(name="Released PC", value=f"`{client_id or 'none'}`",   inline=True)
+    embed.add_field(
+        name="License",
+        value="Freed — ready to bind to a new PC." if had_license else "No license on file.",
+        inline=False
+    )
+    embed.set_footer(text="No cooldown applied — customer can !setup immediately.")
+    await ctx.send(embed=embed)
 
 # =====================================
 # ROK
